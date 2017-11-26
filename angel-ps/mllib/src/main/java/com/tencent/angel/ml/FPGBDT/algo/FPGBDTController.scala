@@ -5,6 +5,8 @@ import java.util.concurrent.{ExecutorService, Executors}
 
 import com.tencent.angel.ml.FPGBDT.{FPGBDTLearner, FPGBDTModel}
 import com.tencent.angel.ml.FPGBDT.algo.FPRegTree.FPRegTDataStore
+import com.tencent.angel.ml.FPGBDT.psf.{RangeBitSetGetRowFunc, RangeBitSetGetRowResult, RangeBitSetUpdateFunc}
+import com.tencent.angel.ml.FPGBDT.psf.RangeBitSetUpdateFunc.BitsUpdateParam
 import com.tencent.angel.ml.GBDT.algo.RegTree.{GradPair, GradStats, RegTNodeStat, RegTree}
 import com.tencent.angel.ml.GBDT.algo.tree.{SplitEntry, TNode}
 import com.tencent.angel.ml.conf.MLConf
@@ -44,9 +46,14 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   val activeNode: Array[Int] = new Array[Int](maxNodeNum) // active tree node, 0:inactive, 1:active, 2:ready
   val activeNodeStat: Array[Int] = new Array[Int](maxNodeNum) // >=1:running, 0:finished, -1:failed
 
+  // map tree node to instance, each item is instance id
+  // be cautious we need each span of `instancePos` in ascending order
+  val nodeToIns: Array[Int] = new Array[Int](trainDataStore.numInstance)
   val nodePosStart: Array[Int] = new Array[Int](maxNodeNum)
   val nodePosEnd: Array[Int] = new Array[Int](maxNodeNum)
-  val instancePos: Array[Int] = (0 until trainDataStore.numInstance).toArray
+  // map instance to tree node, each item is tree node that it locates on
+  val insToNode: Array[Int] = new Array[Int](trainDataStore.numInstance)
+
   val histograms: util.List[util.Map[Int, DenseFloatVector]] =
     new util.ArrayList[util.Map[Int, DenseFloatVector]](param.numTree)
 
@@ -102,6 +109,8 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     // 3. reserve histogram of each node
     val histMap = new util.HashMap[Int, DenseFloatVector]()
     this.histograms.add(histMap)
+    // FOR THE SAKE OF MEMORY, ONLY WHEN DEBUGGING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    if (this.currentTree > 0) this.histograms.set(this.currentTree - 1, null)
     // 4. reset active tree nodes, set all nodes to be inactive
     for (nid <- 0 until this.maxNodeNum) {
       resetActiveTNode(nid)
@@ -109,12 +118,16 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     // 5. set root node to be active
     addReadyNode(0)
     // 6. reset instance position, set the root node's span
+    for (i <- 0 until trainDataStore.numInstance) {
+      this.nodeToIns(i) = i
+    }
     this.nodePosStart(0) = 0
-    this.nodePosEnd(0) = trainDataStore.numInstance
+    this.nodePosEnd(0) = trainDataStore.numInstance - 1
     for (nid <- 1 until this.maxNodeNum) {
       this.nodePosStart(nid) = -1
       this.nodePosEnd(nid) = -1
     }
+    util.Arrays.fill(this.insToNode, 0)
     // 7. set phase
     this.phase = FPGBDTPhase.CHOOSE_ACTIVE
     LOG.info(s"Create new tree cost ${System.currentTimeMillis() - createStart} ms")
@@ -135,10 +148,17 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
           setNodeToLeaf(nid, baseWeight)
         }
         else {
-          // currently we use level-wise training, so we active it anyway
-          addActiveNode(nid)
-          hasActive = true
-          activeList.add(nid)
+          if (this.nodePosEnd(nid) - this.nodePosStart(nid) >= 1000) {
+            // currently we use level-wise training, so we active it
+            addActiveNode(nid)
+            hasActive = true
+            activeList.add(nid)
+          }
+          else {
+            val leafValue = this.forest(this.currentTree).stats.get(nid).baseWeight
+            setNodeToLeaf(nid, leafValue)
+            resetActiveTNode(nid)
+          }
         }
       }
     }
@@ -199,8 +219,8 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     LOG.info(s"------Calculate grad pairs of node[$nid]------")
     val nodeStart: Int = this.nodePosStart(nid)
     val nodeEnd: Int = this.nodePosEnd(nid)
-    for (posIdx <- nodeStart until nodeEnd) {
-      val insIdx: Int = instancePos(posIdx)
+    for (posIdx <- nodeStart to nodeEnd) {
+      val insIdx: Int = nodeToIns(posIdx)
       val pred: Float = trainDataStore.getPred(insIdx)
       val label: Float = trainDataStore.getLabel(insIdx)
       val weight: Float = trainDataStore.getWeight(insIdx)
@@ -239,8 +259,8 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     // 2. sum up gradients
     var gradSum: Float = 0.0f
     var hessSum: Float = 0.0f
-    for (posIdx <- nodeStart until nodeEnd) {
-      val insIdx: Int = instancePos(posIdx)
+    for (posIdx <- nodeStart to nodeEnd) {
+      val insIdx: Int = nodeToIns(posIdx)
       val gradPair: GradPair = gradPairs(insIdx)
       gradSum += gradPair.getGrad
       hessSum += gradPair.getHess
@@ -259,15 +279,77 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       // 3.2. loop non-zero instances, add to histogram, and record the gradients taken
       for (j <- 0 until nnz) {
         val insIdx: Int = indices(j)
-        val binIdx: Int = bins(j)
-        val gradIdx: Int = gradOffset + binIdx
-        val hessIdx: Int = hessOffset + binIdx
-        val gradPair: GradPair = gradPairs(insIdx)
-        histogram.set(gradIdx, histogram.get(gradIdx) + gradPair.getGrad)
-        histogram.set(hessIdx, histogram.get(hessIdx) + gradPair.getHess)
-        gradTaken += gradPair.getGrad
-        hessTaken += gradPair.getHess
+        if (this.insToNode(insIdx) == nid) {
+          val binIdx: Int = bins(j)
+          val gradIdx: Int = gradOffset + binIdx
+          val hessIdx: Int = hessOffset + binIdx
+          val gradPair: GradPair = gradPairs(insIdx)
+          histogram.set(gradIdx, histogram.get(gradIdx) + gradPair.getGrad)
+          histogram.set(hessIdx, histogram.get(hessIdx) + gradPair.getHess)
+          gradTaken += gradPair.getGrad
+          hessTaken += gradPair.getHess
+        }
       }
+      /* // merge sorted array schema, but slow
+      var iter1: Int = nodeStart
+      var iter2: Int = 0
+      while (iter1 <= nodeEnd && iter2 < nnz) {
+        if (this.nodeToIns(iter1) == indices(iter2)) {
+          val insIdx: Int = indices(iter2)
+          val binIdx: Int = bins(iter2)
+          val gradIdx: Int = gradOffset + binIdx
+          val hessIdx: Int = hessOffset + binIdx
+          val gradPair: GradPair = gradPairs(insIdx)
+          histogram.set(gradIdx, histogram.get(gradIdx) + gradPair.getGrad)
+          histogram.set(hessIdx, histogram.get(hessIdx) + gradPair.getHess)
+          gradTaken += gradPair.getGrad
+          hessTaken += gradPair.getHess
+          iter1 += 1
+          iter2 += 1
+        }
+        else if (this.nodeToIns(iter1) < indices(iter2))
+          iter1 += 1
+        else
+          iter2 += 1
+      }*/
+      /*// binary search schema, but slow
+      if (nodeEnd - nodeStart + 1 < nnz) {
+        // loop over all instances on current node
+        for (j <- nodeStart to nodeEnd) {
+          val insIdx: Int = this.instancePos(j)
+          val index: Int = util.Arrays.binarySearch(indices, insIdx)
+          // whether this instance has nonzero value on current feature
+          if (index >= 0) {
+            val binIdx: Int = bins(index)
+            val gradIdx: Int = gradOffset + binIdx
+            val hessIdx: Int = hessOffset + binIdx
+            val gradPair: GradPair = gradPairs(insIdx)
+            histogram.set(gradIdx, histogram.get(gradIdx) + gradPair.getGrad)
+            histogram.set(hessIdx, histogram.get(hessIdx) + gradPair.getHess)
+            gradTaken += gradPair.getGrad
+            hessTaken += gradPair.getHess
+          }
+        }
+      }
+      else {
+        // loop over all instances that have nonzero values on current feature
+        for (j <- 0 until nnz) {
+          val insIdx: Int = indices(j)
+          val index: Int = util.Arrays.binarySearch(
+            this.instancePos, nodeStart, nodeEnd + 1, insIdx)
+          // whether this instance locates on current node
+          if (index >= 0) {
+            val binIdx: Int = bins(j)
+            val gradIdx: Int = gradOffset + binIdx
+            val hessIdx: Int = hessOffset + binIdx
+            val gradPair: GradPair = gradPairs(insIdx)
+            histogram.set(gradIdx, histogram.get(gradIdx) + gradPair.getGrad)
+            histogram.set(hessIdx, histogram.get(hessIdx) + gradPair.getHess)
+            gradTaken += gradPair.getGrad
+            hessTaken += gradPair.getHess
+          }
+        }
+      }*/
       // 3.3. add remaining grad and hess to zero bin
       val zeroIdx: Int = trainDataStore.getZeroBin(fid)
       val gradIdx: Int = gradOffset + zeroIdx
@@ -312,7 +394,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     needFlushMatrixSet.add(FPGBDTModel.LOCAL_VALUE_MAT)
     needFlushMatrixSet.add(FPGBDTModel.LOCAL_GAIN_MAT)
     needFlushMatrixSet.add(FPGBDTModel.NODE_GRAD_MAT)
-    FPGBDTLearner.clockAllMatrices(needFlushMatrixSet, model, true)
+    clockAllMatrices(needFlushMatrixSet, true)
     // 3. leader worker pull all local best splits, find the global best split
     // TODO: find global best on server
     // do not clear node grad stats
@@ -337,7 +419,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
         splitGainMat.add(splitGain.getRow(wid).asInstanceOf[SparseFloatVector])
       }
       // 3.2. clear local best split matrices for next update
-      FPGBDTLearner.clearAllMatrices(needFlushMatrixSet, model)
+      clearAllMatrices(needFlushMatrixSet)
       // 3.2. find global best splits
       val splitFidVec: SparseIntVector = new SparseIntVector(this.maxNodeNum)
       val splitFvalueVec: SparseFloatVector = new SparseFloatVector(this.maxNodeNum)
@@ -372,7 +454,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     needFlushMatrixSet.add(FPGBDTModel.GLOBAL_FEAT_MAT)
     needFlushMatrixSet.add(FPGBDTModel.GLOBAL_VALUE_MAT)
     needFlushMatrixSet.add(FPGBDTModel.GLOBAL_GAIN_MAT)
-    FPGBDTLearner.clockAllMatrices(needFlushMatrixSet, model, true)
+    clockAllMatrices(needFlushMatrixSet, true)
     // 4. finish current phase
     this.phase = FPGBDTPhase.AFTER_SPLIT
     LOG.info(s"Find split cost ${System.currentTimeMillis() - start} ms")
@@ -478,13 +560,17 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     // 1.4. node grad stats
     val nodeGradStats = model.getPSModel(FPGBDTModel.NODE_GRAD_MAT)
     var nodeGradStatsVec = nodeGradStats.getRow(this.currentTree).asInstanceOf[DenseFloatVector]
-    LOG.info(s"Get split result from PS cost ${System.currentTimeMillis() - start} ms")
+    LOG.info(s"Get best split entries from PS cost ${System.currentTimeMillis() - start} ms")
     // 2. reset instance position
     val resetPosStart = System.currentTimeMillis()
+    // 2.0. clear previous split result
+    val resultModel = model.getPSModel(FPGBDTModel.SPLIT_RESULT_MAT)
+    //resultModel.zero()
+    //resultModel.clock().get
+    //sync()
     // 2.1. get split result of responsible nodes
     // TODO: use BitSet
-    //val splitResult: MyBitSet = new MyBitSet(trainDataStore.numInstance)
-    var splitResult: Array[Int] = new Array[Int](trainDataStore.numInstance)
+    //var splitResult: Array[Int] = new Array[Int](trainDataStore.numInstance)
     for (nid <- 0 until this.maxNodeNum) {
       if (this.activeNode(nid) == 1) {
         val fid: Int = bestSplitFidVec.get(nid)
@@ -495,24 +581,35 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
         val sumHess: Float = nodeGradStatsVec.get(nid + this.maxNodeNum)
         val nodeStat: GradStats = new GradStats(sumGrad, sumHess)
         if (param.featLo <= fid && fid < param.featHi) {
+          // 2.1.1. get split result, represented by a bitset
+          val nodeStart: Int = this.nodePosStart(nid)
+          val nodeEnd: Int = this.nodePosEnd(nid)
+          val bitset: RangeBitSet = new RangeBitSet(nodeStart, nodeEnd)
           val (leftChildGradStats, rightChildGradStats) =
-            getSplitResult(nid, splitEntry, nodeStat, splitResult)
+            getSplitResult(nid, splitEntry, nodeStat, bitset)
+          // 2.1.2. push split result to PS
+          val matrixId = resultModel.getMatrixId()
+          val bitsUpdate = new RangeBitSetUpdateFunc(
+            new BitsUpdateParam(matrixId, false, bitset))
+          resultModel.update(bitsUpdate).get
+          // 2.1.3. push children grad stats
           updateNodeGradStats(2 * nid + 1, leftChildGradStats)
           updateNodeGradStats(2 * nid + 2, rightChildGradStats)
         }
       }
     }
-    // 2.2. clear previous split result
-    val resultModel = model.getPSModel(FPGBDTModel.SPLIT_RESULT_MAT)
-    resultModel.zero()
-    resultModel.clock().get
-    // 2.3. push local split result & children grad stats
-    val splitResultVec = new DenseIntVector(trainDataStore.numInstance, splitResult)
-    resultModel.increment(0, splitResultVec)
-    resultModel.clock().get
-    nodeGradStats.clock().get
-    // 2.4. pull global split result & children grad stats
-    splitResult = resultModel.getRow(0).asInstanceOf[DenseIntVector].getValues
+    // 2.2. push local split result & children grad stats
+    //val resultModel = model.getPSModel(FPGBDTModel.SPLIT_RESULT_MAT)
+    //val splitResultVec = new DenseIntVector(trainDataStore.numInstance, splitResult)
+    //resultModel.increment(0, splitResultVec)
+    // 2.2. flush & sync
+    val needFlushMatrices: util.Set[String] = new util.HashSet[String]()
+    needFlushMatrices.add(FPGBDTModel.SPLIT_RESULT_MAT)
+    needFlushMatrices.add(FPGBDTModel.NODE_GRAD_MAT)
+    clockAllMatrices(needFlushMatrices, true)
+    sync()
+    // 2.3. pull global split result & children grad stats
+    //splitResult = resultModel.getRow(0).asInstanceOf[DenseIntVector].getValues
     nodeGradStatsVec = nodeGradStats.getRow(this.currentTree).asInstanceOf[DenseFloatVector]
     LOG.info(s"Get split result cost ${System.currentTimeMillis() - resetPosStart} ms")
     // 3. split node
@@ -539,6 +636,11 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
         splitNode(nid, splitEntry, nodeStat, leftChildStats, rightChildStats)
         if (fid != -1) {
           // 3.6. reset instance pos
+          //resetInstancePos(nid, splitResult)
+          val nodeStart: Int = this.nodePosStart(nid)
+          val nodeEnd: Int = this.nodePosEnd(nid)
+          val getFunc = new RangeBitSetGetRowFunc(resultModel.getMatrixId(), nodeStart, nodeEnd)
+          val splitResult = resultModel.get(getFunc).asInstanceOf[RangeBitSetGetRowResult].getRangeBitSet
           resetInstancePos(nid, splitResult)
           // 3.7. set children as ready
           addReadyNode(2 * nid + 1)
@@ -548,15 +650,17 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
         resetActiveTNode(nid)
       }
     }
+    // 4. finish current phase
+    this.phase = FPGBDTPhase.CHOOSE_ACTIVE
     LOG.info(s"After split cost: ${System.currentTimeMillis() - start} ms")
   }
 
   // get split result of responsible nodes
   def getSplitResult(nid: Int, splitEntry: SplitEntry,
-                     nodeStat: GradStats, splitResult: Array[Int]): (GradStats, GradStats) = {
+                     nodeStat: GradStats, bitset: RangeBitSet): (GradStats, GradStats) = {
     val splitFid: Int = splitEntry.getFid
     val splitFvalue: Float = splitEntry.getFvalue
-    LOG.info(s"------Get split result of node[$nid]: fid[$splitFid] fvalue[$splitFvalue]")
+    LOG.info(s"------Get split result of node[$nid]: fid[$splitFid] fvalue[$splitFvalue]------")
     val nodeStart: Int = this.nodePosStart(nid)
     val nodeEnd: Int = this.nodePosEnd(nid)
     LOG.info(s"Node[$nid] span: [$nodeStart-$nodeEnd]")
@@ -566,40 +670,187 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     var leftChildSumHess: Float = 0.0f
     var rightChildSumHess: Float = 0.0f
     if (nodeStart <= nodeEnd) {
-      // find out instances that should be in right child
+      var rightCount: Int = 0
       // TODO: use bins rather than values
       val indices: Array[Int] = trainDataStore.getFeatRow(splitFid).getIndices
       val values: Array[Double] = trainDataStore.getFeatRow(splitFid).getValues
       val nnz: Int = indices.length
-      // if split value >= 0, default left, otherwise default right
-      if (splitFvalue >= 0.0f) {
-        for (i <- 0 until nnz) {
-          if (values(i) > splitFvalue) {
-            //splitResult.set(indices(i))
-            splitResult(indices(i)) = 1
-            rightChildSumGrad += this.gradPairs(indices(i)).getGrad
-            rightChildSumHess += this.gradPairs(indices(i)).getHess
+      // find out instances that should be in right child
+      /*if (splitFvalue < 0.0) {
+        // default to right child
+        for (j <- nodeStart to nodeEnd) {
+          bitset.set(j)
+        }
+        rightCount = nodeEnd - nodeStart + 1
+        // pick out the instances that should be in left child
+        // loop over nonzero instance and check whether it locates on current node
+        var searchFrom: Int = nodeStart
+        for (j <- 0 until nnz) {
+          val insIdx: Int = indices(j)
+          if (this.insToNode(insIdx) == nid && values(j) <= splitFvalue) {
+            val index: Int = util.Arrays.binarySearch(
+              this.nodeToIns, searchFrom, nodeEnd + 1, insIdx)
+            bitset.clear(index)
+            rightCount -= 1
+            leftChildSumGrad += this.gradPairs(insIdx).getGrad
+            leftChildSumHess += this.gradPairs(insIdx).getHess
+            searchFrom = index + 1
+          }
+        }
+        rightChildSumGrad = nodeStat.getSumGrad - leftChildSumGrad
+        rightChildSumHess = nodeStat.getSumHess - leftChildSumHess
+      }
+      else {
+        // default to left, pick out the instances that should be in right child
+        // loop over nonzero instance and check whether it locates on current node
+        var searchFrom: Int = nodeStart
+        for (j <- 0 until nnz) {
+          val insIdx: Int = indices(j)
+          if (this.insToNode(insIdx) == nid && values(j) > splitFvalue) {
+            val index: Int = util.Arrays.binarySearch(
+              this.nodeToIns, searchFrom, nodeEnd + 1, insIdx)
+            bitset.set(index)
+            rightCount += 1
+            rightChildSumGrad += this.gradPairs(insIdx).getGrad
+            rightChildSumHess += this.gradPairs(insIdx).getHess
+            searchFrom = index + 1
+          }
+        }
+        rightChildSumGrad = nodeStat.getSumGrad - leftChildSumGrad
+        rightChildSumHess = nodeStat.getSumHess - leftChildSumHess
+      }*/
+
+      /* // merge sorted array schema, but slow
+      var iter1: Int = nodeStart
+      var iter2: Int = nnz
+      if (splitFvalue < 0.0) {
+        // default to right child
+        for (j <- nodeStart to nodeEnd) {
+          bitset.set(j)
+        }
+        rightCount = nodeEnd - nodeStart + 1
+        // pick out the instances that should be in left child
+        while (iter1 <= nodeEnd && iter2 < nnz) {
+          if (this.nodeToIns(iter1) == indices(iter2)) {
+            if (values(iter2) <= splitFvalue) {
+              bitset.clear(iter1)
+              rightCount -= 1
+              val insIdx: Int = indices(iter2)
+              leftChildSumGrad += this.gradPairs(insIdx).getGrad
+              leftChildSumHess += this.gradPairs(insIdx).getHess
+              iter1 += 1
+              iter2 += 1
+            }
+          }
+          else if (this.nodeToIns(iter1) < indices(iter2))
+            iter1 += 1
+          else
+            iter2 += 1
+        }
+        rightChildSumGrad = nodeStat.getSumGrad - leftChildSumGrad
+        rightChildSumHess = nodeStat.getSumHess - leftChildSumHess
+      }
+      else {
+        // default to left child, find out the instances that should be in right child
+        while (iter1 <= nodeEnd && iter2 < nnz) {
+          if (this.nodeToIns(iter1) == indices(iter2)) {
+            if (values(iter2) > splitFvalue) {
+              bitset.set(iter1)
+              rightCount += 1
+              val insIdx: Int = indices(iter2)
+              rightChildSumGrad += this.gradPairs(insIdx).getGrad
+              rightChildSumHess += this.gradPairs(insIdx).getHess
+            }
+          }
+        }
+        leftChildSumGrad = nodeStat.getSumGrad - rightChildSumGrad
+        leftChildSumHess = nodeStat.getSumHess - rightChildSumHess
+      }*/
+
+      // binary search schema, but slow
+      if (nodeEnd - nodeStart + 1 < nnz) {
+        // loop over all instances on current node
+        var searchFrom: Int = 0
+        for (j <- nodeStart to nodeEnd) {
+          val insIdx: Int = this.nodeToIns(j)
+          //val index: Int = util.Arrays.binarySearch(indices, insIdx)
+          val index: Int = util.Arrays.binarySearch(indices, searchFrom, nnz, insIdx)
+          // whether this instance has nonzero value on current feature
+          if (index >= 0) {
+            if (values(index) > splitFvalue) { // feature value larger than split value
+              bitset.set(j)
+              rightCount += 1
+              rightChildSumGrad += this.gradPairs(insIdx).getGrad
+              rightChildSumHess += this.gradPairs(insIdx).getHess
+            }
+            searchFrom = index + 1
+          }
+          else if (splitFvalue < 0.0f) { // default to right child
+            bitset.set(j)
+            rightCount += 1
+            rightChildSumGrad += this.gradPairs(insIdx).getGrad
+            rightChildSumHess += this.gradPairs(insIdx).getHess
           }
         }
         leftChildSumGrad = nodeStat.getSumGrad - rightChildSumGrad
         leftChildSumHess = nodeStat.getSumHess - rightChildSumHess
       }
       else {
-        for (i <- nodeStart until nodeEnd) {
-          //splitResult.set(this.instancePos(i))
-          splitResult(this.instancePos(i)) = 1
-        }
-        for (i <- 0 until nnz) {
-          if (values(i) < splitFvalue) {
-            //splitResult.clear(indices(i))
-            splitResult(indices(i)) = 0
-            leftChildSumGrad += this.gradPairs(indices(i)).getGrad
-            leftChildSumHess += this.gradPairs(indices(i)).getHess
+        // loop over all instances that have nonzero values on current feature
+        if (splitFvalue < 0.0f) {
+          // default to right child
+          for (j <- nodeStart to nodeEnd) {
+            bitset.set(j)
+            rightCount += 1
           }
+          // pick out the instances that should be in the left child
+          var searchFrom: Int = nodeStart
+          for (j <- 0 until nnz) {
+            if (values(j) <= splitFvalue) { // bi-search only when it <= splitFvalue
+              val insIdx: Int = indices(j)
+              //val index: Int = util.Arrays.binarySearch(
+              //  this.nodeToIns, nodeStart, nodeEnd + 1, insIdx)
+              val index: Int = util.Arrays.binarySearch(
+                this.nodeToIns, searchFrom, nodeEnd + 1, insIdx)
+              // whether this instance locates on current node
+              if (index >= 0) {
+                bitset.clear(index)
+                rightCount -= 1
+                leftChildSumGrad += this.gradPairs(insIdx).getGrad
+                leftChildSumHess += this.gradPairs(insIdx).getHess
+                searchFrom = index + 1
+              }
+            }
+          }
+          rightChildSumGrad = nodeStat.getSumGrad - leftChildSumGrad
+          rightChildSumHess = nodeStat.getSumHess - leftChildSumHess
         }
-        rightChildSumGrad = nodeStat.getSumGrad - leftChildSumGrad
-        rightChildSumHess = nodeStat.getSumHess - leftChildSumHess
+        else {
+          // default to left child
+          var searchFrom: Int = nodeStart
+          for (j <- 0 until nnz) {
+            if (values(j) > splitFvalue) { // bi-search only when it > splitFvalue
+            val insIdx: Int = indices(j)
+              //val index: Int = util.Arrays.binarySearch(
+              //  this.nodeToIns, nodeStart, nodeEnd + 1, insIdx)
+              val index: Int = util.Arrays.binarySearch(
+                this.nodeToIns, searchFrom, nodeEnd + 1, insIdx)
+              // whether this instance locates on current node
+              if (index >= 0) {
+                bitset.set(index)
+                rightCount += 1
+                rightChildSumGrad += this.gradPairs(insIdx).getGrad
+                rightChildSumHess += this.gradPairs(insIdx).getHess
+                searchFrom = index + 1
+              }
+            }
+          }
+          leftChildSumGrad = nodeStat.getSumGrad - rightChildSumGrad
+          leftChildSumHess = nodeStat.getSumHess - rightChildSumHess
+        }
       }
+      LOG.info(s"Node[$nid] split: left with grad stats[$leftChildSumGrad, $leftChildSumHess], " +
+        s"right child with grad stats[$rightChildSumGrad, $rightChildSumHess]")
     }
     val leftChildGradStats = new GradStats(leftChildSumGrad, leftChildSumHess)
     val rightChildGradStats = new GradStats(rightChildSumGrad, rightChildSumHess)
@@ -641,10 +892,10 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   }
 
   // reset instance position thru global split result
-  def resetInstancePos(nid: Int, splitResult: Array[Int]): Unit = {
+  def resetInstancePos(nid: Int, splitResult: RangeBitSet): Unit = {
     val nodeStart: Int = this.nodePosStart(nid)
     val nodeEnd: Int = this.nodePosEnd(nid)
-    LOG.info(s"------Reset instance position of node[$nid] with span [$nodeStart-$nodeEnd]")
+    LOG.info(s"------Reset instance position of node[$nid] with span [$nodeStart-$nodeEnd]------")
     // if no instance on this node
     if (nodeStart > nodeEnd) {
       // set the span of left child
@@ -655,38 +906,70 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       this.nodePosEnd(2 * nid + 2) = nodeEnd
     }
     else {
-      var left: Int = nodeStart
+      val leftSpan: Array[Int] = new Array[Int](nodeEnd - nodeStart + 1)
+      val rightSpan: Array[Int] = new Array[Int](nodeEnd - nodeStart + 1)
+      val leftChildNid: Int = 2 * nid + 1
+      val rightChildNid: Int = 2 * nid + 2
+      var leftCount: Int = 0
+      var rightCount: Int = 0
+      for (j <- nodeStart until nodeEnd) {
+        val insIdx: Int = this.nodeToIns(j)
+        if (!splitResult.get(j)) {
+          leftSpan(leftCount) = insIdx
+          this.insToNode(insIdx) = leftChildNid
+          leftCount += 1
+        }
+        else {
+          rightSpan(rightCount) = insIdx
+          this.insToNode(insIdx) = rightChildNid
+          rightCount += 1
+        }
+      }
+      System.arraycopy(leftSpan, 0, this.nodeToIns, nodeStart, leftCount)
+      System.arraycopy(rightSpan, 0, this.nodeToIns, nodeStart + leftCount, rightCount)
+      this.nodePosStart(2 * nid + 1) = nodeStart
+      this.nodePosStart(2 * nid + 2) = nodeStart + leftCount
+      this.nodePosEnd(2 * nid + 1) = nodeStart + leftCount - 1
+      this.nodePosEnd(2 * nid + 2) = nodeEnd
+
+      /*var left: Int = nodeStart
       var right: Int = nodeEnd
       while (left < right) {
         // 1. left to right, find the first instance that should be in the right child
-        var leftInsIdx: Int = this.instancePos(left)
-        while (left < right && splitResult(leftInsIdx) == 0) {
+        var leftInsIdx: Int = this.nodeToIns(left)
+        while (left < right && !splitResult.get(left)) {
+          this.insToNode(leftInsIdx) = leftChildNid
           left += 1
-          leftInsIdx = this.instancePos(left)
+          leftInsIdx = this.nodeToIns(left)
         }
         // 2. right to left, find the first instance that should be in the left child
-        var rightInsIdx: Int = this.instancePos(right)
-        while (left < right && splitResult(right) == 1) {
+        var rightInsIdx: Int = this.nodeToIns(right)
+        while (left < right && splitResult.get(right)) {
+          this.insToNode(rightInsIdx) = rightChildNid
           right -= 1
-          rightInsIdx = this.instancePos(right)
+          rightInsIdx = this.nodeToIns(right)
         }
         // 3. swap two instances
         if (left < right) {
-          this.instancePos(left) = rightInsIdx
-          this.instancePos(right) = leftInsIdx
+          this.insToNode(leftInsIdx) = rightChildNid
+          this.insToNode(rightInsIdx) = leftChildNid
+          this.nodeToIns(left) = rightInsIdx
+          this.nodeToIns(right) = leftInsIdx
+          left += 1
+          right -= 1
         }
       }
       // 4. find the cut pos
-      val curInsIdx: Int = this.instancePos(left)
-      val cutPos = if (splitResult(curInsIdx) == 1) left else left + 1
+      //val curInsIdx: Int = this.instancePos(left)
+      val cutPos = if (!splitResult.get(left)) left else left + 1
       // 5. set the span of children
       this.nodePosStart(2 * nid + 1) = nodeStart
       this.nodePosStart(2 * nid + 2) = cutPos
       this.nodePosEnd(2 * nid + 1) = cutPos - 1
-      this.nodePosEnd(2 * nid + 2) = nodeEnd
+      this.nodePosEnd(2 * nid + 2) = nodeEnd*/
     }
-    LOG.info(s"Left child[${2*nid+1} span: [${this.nodePosStart(2*nid+1)}-${this.nodePosEnd(2*nid+1)}]]")
-    LOG.info(s"Right child[${2*nid+2} span: [${this.nodePosStart(2*nid+2)}-${this.nodePosEnd(2*nid+2)}]]")
+    LOG.info(s"Left child[${2*nid+1}] span: [${this.nodePosStart(2*nid+1)}-${this.nodePosEnd(2*nid+1)}]")
+    LOG.info(s"Right child[${2*nid+2}] span: [${this.nodePosStart(2*nid+2)}-${this.nodePosEnd(2*nid+2)}]")
   }
 
   // set node to active
@@ -703,7 +986,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
 
   // set node to be leaf
   def setNodeToLeaf(nid: Int, nodeWeight: Float): Unit = {
-    LOG.debug(s"Set node[$nid] as leaf node, leaf weight=$nodeWeight")
+    LOG.info(s"Set node[$nid] as leaf node, leaf weight=$nodeWeight")
     this.forest(this.currentTree).nodes.get(nid).chgToLeaf()
     this.forest(this.currentTree).nodes.get(nid).setLeafValue(nodeWeight)
   }
@@ -750,13 +1033,13 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     val start = System.currentTimeMillis()
     for (nid <- 0 until this.maxNodeNum) {
       val node: TNode = this.forest(this.currentTree).nodes.get(nid)
-      if (node.isLeaf) {
+      if (node != null && node.isLeaf) {
         val weight: Float = node.getLeafValue
-        LOG.info(s"Leaf[$nid] weight: $weight")
         val nodeStart: Int = this.nodePosStart(nid)
         val nodeEnd: Int = this.nodePosEnd(nid)
-        for (i <- nodeStart until nodeEnd) {
-          val insIdx: Int = this.instancePos(i)
+        LOG.info(s"Leaf[$nid] weight: $weight, span: [$nodeStart-$nodeEnd]")
+        for (i <- nodeStart to nodeEnd) {
+          val insIdx: Int = this.nodeToIns(i)
           trainDataStore.preds(insIdx) += param.learningRate * weight
         }
       }
@@ -773,7 +1056,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       val vec: DenseFloatVector = new DenseFloatVector(this.maxNodeNum)
       for (nid <- 0 until this.maxNodeNum) {
         val node: TNode = this.forest(this.currentTree).nodes.get(nid)
-        if (node.isLeaf) {
+        if (node != null && node.isLeaf) {
           val weight: Float = node.getLeafValue
           vec.set(nid, weight)
         }
@@ -800,21 +1083,22 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   // predict
   def predict(dataStore: FPRegTDataStore): Tuple1[Float] = {
     LOG.info("------Predict------")
-    val start = System.currentTimeMillis()
+    new Tuple1[Float](Float.NaN)
+    /*val start = System.currentTimeMillis()
 
     val splitFeat = model.getPSModel(FPGBDTModel.GLOBAL_FEAT_MAT)
     val splitValue = model.getPSModel(FPGBDTModel.GLOBAL_VALUE_MAT)
     val nodePreds = model.getPSModel(FPGBDTModel.NODE_PRED_MAT)
 
     val splitFeatVec = splitFeat.getRow(this.currentTree).asInstanceOf[TIntVector]
-    val splitValueVec = splitValue.getRow(this.currentTree).asInstanceOf[TIntVector]
-    val nodePredsVec = nodePreds.getRow(this.currentTree).asInstanceOf[TIntVector]
+    val splitValueVec = splitValue.getRow(this.currentTree).asInstanceOf[TFloatVector]
+    val nodePredsVec = nodePreds.getRow(this.currentTree).asInstanceOf[TFloatVector]
     LOG.info(s"Prediction of tree[${this.currentTree}]: ["
       + nodePredsVec.getValues.mkString(", ") + "]")
 
     val validInsPos: Array[Int] = new Array[Int](dataStore.numInstance)
 
-    new Tuple1[Float](0.0f)
+    new Tuple1[Float](0.0f)*/
   }
 
   // set the tree phase
@@ -837,5 +1121,17 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
 
   // check if finish all the trees
   def isFinished: Boolean = this.currentTree >= param.numTree
+
+  def sync(): Unit = {
+    FPGBDTLearner.sync(model)
+  }
+
+  def clockAllMatrices(needFlushMatrices: util.Set[String], wait: Boolean): Unit = {
+    FPGBDTLearner.clockAllMatrices(needFlushMatrices, model, wait)
+  }
+
+  def clearAllMatrices(needClearMatrices: util.Set[String]): Unit = {
+    FPGBDTLearner.clearAllMatrices(needClearMatrices, model)
+  }
 
 }

@@ -7,8 +7,6 @@ import com.tencent.angel.ml.matrix.psf.update.enhance.UpdateParam;
 import com.tencent.angel.ps.impl.PSContext;
 import com.tencent.angel.ps.impl.matrix.*;
 import com.tencent.angel.psagent.PSAgentContext;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -54,7 +52,7 @@ public class ClearUpdate extends UpdateFunc {
       int size = partList.size();
       List<PartitionUpdateParam> partParamList = new ArrayList<>(size);
       for (int i = 0; i < size; i++) {
-        partParamList.add(new ClearPartitionUpdaterParam(matrixId, partList.get(i), updateClock));
+        partParamList.add(new ClearPartitionUpdateParam(matrixId, partList.get(i), updateClock));
       }
       return partParamList;
     }
@@ -63,7 +61,7 @@ public class ClearUpdate extends UpdateFunc {
   /**
    * The partition updater parameter.
    */
-  public static class ClearPartitionUpdaterParam extends PartitionUpdateParam {
+  public static class ClearPartitionUpdateParam extends PartitionUpdateParam {
     /**
      * Creates new partition updater parameter.
      *
@@ -71,14 +69,14 @@ public class ClearUpdate extends UpdateFunc {
      * @param partKey the part key
      * @param updateClock the update clock
      */
-    public ClearPartitionUpdaterParam(int matrixId, PartitionKey partKey, boolean updateClock) {
+    public ClearPartitionUpdateParam(int matrixId, PartitionKey partKey, boolean updateClock) {
       super(matrixId, partKey, updateClock);
     }
 
     /**
      * Creates a new partition updater parameter by default.
      */
-    public ClearPartitionUpdaterParam() {
+    public ClearPartitionUpdateParam() {
       super();
     }
   }

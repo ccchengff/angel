@@ -13,17 +13,25 @@ import com.tencent.angel.ml.feature.LabeledData
 import com.tencent.angel.ml.math.vector._
 import com.tencent.angel.ml.matrix.psf.update.enhance.VoidResult
 import com.tencent.angel.ml.metric.ErrorMetric
-import com.tencent.angel.ml.model.{MLModel, PSModel}
+import com.tencent.angel.ml.model.MLModel
 import com.tencent.angel.ml.param.FPGBDTParam
 import com.tencent.angel.worker.storage.DataBlock
 import com.tencent.angel.worker.task.TaskContext
 import org.apache.commons.logging.LogFactory
+
 
 /**
   * Created by ccchengff on 2017/11/16.
   */
 object FPGBDTLearner {
   val LOG = LogFactory.getLog(classOf[FPGBDTLearner])
+
+  def sync(model: MLModel): Unit = {
+    val syncModel = model.getPSModel(FPGBDTModel.SYNC)
+    syncModel.clock().get
+    syncModel.getRow(0)
+    LOG.info("SYNCHRONIZATION")
+  }
 
   def clearAllMatrices(needClearMatrices: util.Set[String], model: MLModel): Unit = {
     val iterator = needClearMatrices.iterator()
@@ -152,14 +160,14 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     sampleNumModel.clock().get
     sampleNumVec = sampleNumModel.getRow(0).asInstanceOf[DenseIntVector]
     var numTotalSample: Int = 0
-    var offset: Int = 0
+    var from: Int = 0
     for (i <- 0 until numWorker) {
       numTotalSample += sampleNumVec.get(i)
       if (i < ctx.getTaskIndex)
-        offset += sampleNumVec.get(i)
+        from += sampleNumVec.get(i)
     }
     LOG.info(s"Sum up sample number cost ${System.currentTimeMillis() - sumUpStart} ms, "
-      + s"total sample number=$numTotalSample, Task[${ctx.getTaskIndex}] offset=$offset")
+      + s"total sample number=$numTotalSample, Task[${ctx.getTaskIndex}] from=$from")
 
     // 3. push features & create feature data storage
     val createStart = System.currentTimeMillis()
@@ -179,7 +187,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
           LOG.info(s"Task[${ctx.getTaskIndex}] feature[$fid] nnz=$nnz")
           val featRow = new SparseDoubleVector(numTotalSample, nnz)
           for (i <- 0 until nnz) {
-            val k = featIndices(fid).get(i) + offset
+            val k = featIndices(fid).get(i) + from
             val v = featValues(fid).get(i)
             featRow.set(k, v)
           }
@@ -212,7 +220,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     // 3.3. set info for each instance
     var labelsVec = new DenseFloatVector(numTotalSample)
     for (i <- 0 until numLocalSample) {
-      val k = i + offset
+      val k = i + from
       val v = labelsList.get(i)
       labelsVec.set(k, v)
     }
@@ -293,7 +301,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       offset += sampleNumVec.get(i)
     }
     LOG.info(s"Sum up sample number cost ${System.currentTimeMillis() - sumUpStart} ms, "
-      + s"total sample number=$numTotalSample, Task[${ctx.getTaskIndex}] offset=$offset")
+      + s"total sample number=$numTotalSample, Task[${ctx.getTaskIndex}] first instance index=$offset")
     // 3. push features & create feature data storage
     val createStart = System.currentTimeMillis()
     // 3.1. create data storage
@@ -307,7 +315,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       /*val featIndicesArr: Array[Int] = new Array[Int](nnz)
       val featValuesArr: Array[Double] = new Array[Double](nnz)
       for (i <- 0 until nnz) {
-        featIndicesArr(i) = featIndices(fid).get(i) + offset
+        featIndicesArr(i) = featIndices(fid).get(i) + from
         featValuesArr(i) = featValues(fid).get(i)
       }
       var featRow = new SparseDoubleSortedVector(numTotalSample, featIndicesArr, featValuesArr)*/
@@ -319,6 +327,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       }
       featModel.increment(fid, featRow)
       featModel.clock().get
+      if ((fid + 1) % 1000 == 0) LOG.info(s"Pushed ${fid + 1} feature rows")
       /*if (featLo <= fid && fid < featHi) {
         val temp = featModel.getRow(fid).asInstanceOf[SparseDoubleVector]
         val indices = temp.getIndices
@@ -345,7 +354,8 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       }
       val featRow = new SparseDoubleSortedVector(numTotalSample, indices, values)
       fpDataStore.setFeatureRow(fid, featRow)
-      //LOG.info(s"Task[${ctx.getTaskIndex}] feature[$fid] total nnz=$totalNnz")
+      if ((fid - param.featLo + 1) % 1000 == 0) LOG.info(s"Pulled ${fid - param.featLo + 1} feature rows")
+      // LOG.info(s"Task[${ctx.getTaskIndex}] feature[$fid] total nnz=$totalNnz")
     }
     LOG.info(s"Set feature rows cost ${System.currentTimeMillis() - createStart} ms")
     // 3.3. set info for each instance

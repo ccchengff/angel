@@ -14,6 +14,7 @@ import io.netty.buffer.ByteBuf;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -25,30 +26,19 @@ import java.util.List;
  * Modify bitset (presented by an array of Integers) on PS
  * The given byte array must be aligned to 8
  */
-public class BitsUpdate extends UpdateFunc {
-  public static final Log LOG = LogFactory.getLog(BitsUpdate.class);
+public class RangeBitSetUpdateFunc extends UpdateFunc {
+  public static final Log LOG = LogFactory.getLog(RangeBitSetUpdateFunc.class);
 
-  public BitsUpdate(BitsUpdateParam param) {
+  public RangeBitSetUpdateFunc(BitsUpdateParam param) {
     super(param);
   }
 
-  public BitsUpdate() {
+  public RangeBitSetUpdateFunc() {
     super(null);
   }
 
   public static class BitsUpdateParam extends UpdateParam {
     protected final RangeBitSet bitset;
-    /*protected final byte[] bits;
-    protected final long from;
-    protected final long to;
-
-    public BitsUpdateParam(int matrixId, boolean updateClock,
-                           byte[] bits, long from, long to) {
-      super(matrixId, updateClock);
-      this.bits = bits;
-      this.from = from;
-      this.to = to;
-    }*/
 
     public BitsUpdateParam(int matrixId, boolean updateClock,
                            RangeBitSet bitset) {
@@ -73,8 +63,6 @@ public class BitsUpdate extends UpdateFunc {
         int right = (int)partKey.getEndCol() * 32 - 1;
         RangeBitSet subset = this.bitset.overlap(left, right);
         if (subset == null) continue;
-        LOG.info(String.format("Return overlap [%d, %d]",
-                subset.getRangeFrom(), subset.getRangeTo()));
         BitsPartitionUpdateParam partParam = new BitsPartitionUpdateParam(
                 matrixId, partKey, updateClock, subset, left * 8);
         partParamList.add(partParam);
@@ -84,17 +72,6 @@ public class BitsUpdate extends UpdateFunc {
   }
 
   public static class BitsPartitionUpdateParam extends PartitionUpdateParam {
-    /*protected final byte[] bits;
-    protected final long from;
-    protected final long to;
-
-    public BitsPartitionUpdateParam(int matrixId, PartitionKey partKey, boolean updateClock,
-                                    byte[] bits, long from, long to) {
-      super(matrixId, partKey, updateClock);
-      this.bits = bits;
-      this.from = from;
-      this.to = to;
-    }*/
 
     protected RangeBitSet bitset;
     protected int offset;
@@ -114,7 +91,6 @@ public class BitsUpdate extends UpdateFunc {
 
     @Override
     public void serialize(ByteBuf buf) {
-      LOG.info("Serialization");
       super.serialize(buf);
       bitset.serialize(buf);
       buf.writeInt(offset);
@@ -122,7 +98,6 @@ public class BitsUpdate extends UpdateFunc {
 
     @Override
     public void deserialize(ByteBuf buf) {
-      LOG.info("Deserialization");
       super.deserialize(buf);
       if (buf.isReadable()) {
         bitset = new RangeBitSet();
@@ -150,7 +125,6 @@ public class BitsUpdate extends UpdateFunc {
     if (part != null) {
       int startRow = part.getPartitionKey().getStartRow();
       int endRow = part.getPartitionKey().getEndRow();
-      LOG.info(String.format("Rows: [%d-%d)", startRow, endRow));
       for (int i = startRow; i < endRow; i++) {
         ServerRow row = part.getRow(i);
         if (row == null) {
@@ -162,7 +136,6 @@ public class BitsUpdate extends UpdateFunc {
   }
 
   private void bitsUpdate(ServerRow row, BitsPartitionUpdateParam partParam) {
-    LOG.info("Row type: " + row.getRowType());
     switch (row.getRowType()) {
       case T_INT_DENSE:
         bitsUpdate((ServerDenseIntRow)row, partParam);
@@ -173,14 +146,13 @@ public class BitsUpdate extends UpdateFunc {
   }
 
   private void bitsUpdate(ServerDenseIntRow row, BitsPartitionUpdateParam partParam) {
-    LOG.info(String.format("Row columns: [%d-%d)", row.getStartCol(), row.getEndCol()));
     if (partParam.bitset == null) return;
     try {
       row.getLock().writeLock().lock();
       byte[] data = row.getDataArray();
       int from = partParam.bitset.getRangeFrom() - partParam.offset;
       int to = partParam.bitset.getRangeTo() - partParam.offset;
-      LOG.info(String.format("[%d-%d] ==> [%d-%d]", partParam.bitset.getRangeFrom(),
+      LOG.debug(String.format("[%d-%d] ==> [%d-%d]", partParam.bitset.getRangeFrom(),
               partParam.bitset.getRangeTo(), from, to));
       byte[] bits = partParam.bitset.toByteArray();
       int first = from >> 3;
@@ -204,35 +176,10 @@ public class BitsUpdate extends UpdateFunc {
       // other bytes
       first++;
       last--;
-      System.arraycopy(bits, 1, data, first, last - first + 1);
-      print(bits, 0, to - from);
-      print(data, from, to);
-      compare(data, bits, from, to);
+      if (last >= first)
+        System.arraycopy(bits, 1, data, first, last - first + 1);
     } finally {
       row.getLock().writeLock().unlock();
-    }
-  }
-
-  static void print(byte[] arr, int from, int to) {
-    String str = "";
-    for (int i = from; i <= to; i++) {
-      int x = i / 8, y = i % 8;
-      if (((arr[x] >> y) & 0x1) == 1)
-        str += "1 ";
-      else
-        str += "0 ";
-    }
-    LOG.info(str);
-  }
-
-  static void compare(byte[] arr1, byte[] arr2, int from, int to) {
-    for (int i = from; i <= to; i++) {
-      int x1 = i / 8, y1 = i % 8;
-      int x2 = (i - from) / 8, y2 = (i - from) % 8;
-      if (((arr1[x1] >> y1) & 0x1) != ((arr2[x2] >> y2) & 0x1)) {
-        LOG.info("Not match!");
-        break;
-      }
     }
   }
 }

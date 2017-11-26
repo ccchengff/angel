@@ -49,12 +49,17 @@ class FPRegTDataStore(param: FPGBDTParam, _numInstance: Int) {
       fracs(i) = i.toDouble / numSplit.toDouble
     }
 
+    var minNnz = numInstance
+    var maxNnz = 0
     for (fid <- param.featLo until param.featHi) {
       val i = fid - param.featLo
       // 1. create quantile sketch
       val sketch = DoublesSketch.builder().build()
       val values = featRows(i).getValues
       val nnz = values.length
+      //minNnz = Math.min(minNnz, Math.max(0, nnz))
+      if (nnz < minNnz && nnz > 0) minNnz = nnz
+      if (nnz > maxNnz) maxNnz = nnz
       for (ins <- 0 until nnz) {
         sketch.update(values(ins))
       }
@@ -69,6 +74,7 @@ class FPRegTDataStore(param: FPGBDTParam, _numInstance: Int) {
         featBins(i)(ins) = indexOf(values(ins).toFloat, splits(i), zeroBins(i))
       }
     }
+    LOG.info(s"Feature range: [${param.featLo}-${param.featHi}], min nnz=$minNnz, max nnz=$maxNnz")
   }
 
   def findZeroBin(arr: Array[Float]): Int = {

@@ -18,6 +18,7 @@ import org.apache.hadoop.conf.Configuration
   * Created by ccchengff on 2017/11/16.
   */
 object FPGBDTModel {
+  val SYNC: String = "fgbdt.sync"
   val TOTAL_SAMPLE_NUM: String = "fpgbdt.total.sample.num"
   val FEAT_NNZ_MAT: String = "fpgbdt.feature.nnz"
   val LABEL_MAT: String = "fpgbdt.label"
@@ -64,6 +65,13 @@ class FPGBDTModel(conf: Configuration, _ctx: TaskContext = null) extends MLModel
   //}
   //val sampleFeatNum: Int = (featNum * featSampleRatio).toInt
   val trainDataNum = conf.getInt("angel.ml.train.data.num", 100)
+
+  // Matrix xxx: synchronization
+  val sync = PSModel(SYNC, 1, 1)
+    .setRowType(RowType.T_INT_DENSE)
+    .setOplogType("DENSE_INT")
+    .setNeedSave(false)
+  addPSModel(SYNC, sync)
 
   // Matrix 0-0: total sample number
   val totalSampleVec = PSModel(TOTAL_SAMPLE_NUM, 1, wokergroupNumber)
@@ -145,11 +153,13 @@ class FPGBDTModel(conf: Configuration, _ctx: TaskContext = null) extends MLModel
   val nodePred = PSModel(NODE_PRED_MAT, maxTreeNum, maxTNodeNum, maxTreeNum, maxTNodeNum / psNumber)
     .setRowType(RowType.T_FLOAT_DENSE)
     .setOplogType("DENSE_FLOAT")
+    .setAverage(true)
     .setNeedSave(false)
   addPSModel(NODE_PRED_MAT, nodePred)
 
   // Matrix 10: split result
-  val splitResult = PSModel(SPLIT_RESULT_MAT, 1, trainDataNum, 1, trainDataNum / psNumber)
+  val colNum: Int = Math.ceil(trainDataNum / 32.0).toInt
+  val splitResult = PSModel(SPLIT_RESULT_MAT, 1, colNum, 1, colNum)
     .setRowType(RowType.T_INT_DENSE)
     .setOplogType("DENSE_INT")
     .setNeedSave(false)
