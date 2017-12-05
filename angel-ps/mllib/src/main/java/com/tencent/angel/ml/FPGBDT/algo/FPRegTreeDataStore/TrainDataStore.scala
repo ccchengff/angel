@@ -125,6 +125,10 @@ class FPRegTDataStore(param: FPGBDTParam, _numInstance: Int) {
 
   def getSplits(fid: Int) = splits(fid - param.featLo)
 
+  def setSplits(fid: Int, splits: Array[Float]): Unit = {
+    this.splits(fid - param.featLo) = splits
+  }
+
   def getZeroBin(fid: Int) = zeroBins(fid - param.featLo)
 
   def getZeroBins = zeroBins
