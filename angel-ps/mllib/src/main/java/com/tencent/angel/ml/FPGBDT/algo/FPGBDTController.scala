@@ -1,10 +1,11 @@
 package com.tencent.angel.ml.FPGBDT.algo
 
 import java.util
+import java.util.Collections
 import java.util.concurrent.{ExecutorService, Executors}
 
 import com.tencent.angel.ml.FPGBDT.{FPGBDTLearner, FPGBDTModel}
-import com.tencent.angel.ml.FPGBDT.algo.FPRegTree.FPRegTDataStore
+import com.tencent.angel.ml.FPGBDT.algo.FPRegTreeDataStore.{TestDataStore, TrainDataStore}
 import com.tencent.angel.ml.FPGBDT.psf.{RangeBitSetGetRowFunc, RangeBitSetGetRowResult, RangeBitSetUpdateFunc}
 import com.tencent.angel.ml.FPGBDT.psf.RangeBitSetUpdateFunc.BitsUpdateParam
 import com.tencent.angel.ml.GBDT.algo.RegTree.{GradPair, GradStats, RegTNodeStat, RegTree}
@@ -24,7 +25,7 @@ import scala.util.Random
   * Created by ccchengff on 2017/11/16.
   */
 class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
-                       trainDataStore: FPRegTDataStore, validDataStore: FPRegTDataStore) {
+                       trainDataStore: TrainDataStore, validDataStore: TestDataStore) {
   val LOG = LogFactory.getLog(classOf[FPGBDTController])
 
   val forest: Array[RegTree] = new Array[RegTree](param.numTree)
@@ -96,6 +97,34 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       + s"sample ratio ${param.colSample}, sample ${fset.get(currentTree).length} features")
   }
 
+  // calculate gradients of all instances, push root node stats to PS
+  def calGradPairs(): Unit = {
+    LOG.info(s"------Calculate grad pairs------")
+    var gradSum: Float = 0.0f
+    var hessSum: Float = 0.0f
+    for (insIdx <- 0 until trainDataStore.numInstance) {
+      val pred: Float = trainDataStore.getPred(insIdx)
+      val label: Float = trainDataStore.getLabel(insIdx)
+      val weight: Float = trainDataStore.getWeight(insIdx)
+      val prob: Float = objective.transPred(pred)
+      val grad: Float = objective.firOrderGrad(prob, label) * weight
+      val hess: Float = objective.secOrderGrad(prob, label) * weight
+      gradPairs(insIdx) = new GradPair(grad, hess)
+      gradSum += grad
+      hessSum += hess
+    }
+    val rootStats: GradStats = new GradStats(gradSum, hessSum)
+    this.forest(this.currentTree).stats.get(0).setStats(rootStats)
+    LOG.info(s"Root[0] sumGrad[$gradSum], sumHess[$hessSum], "
+      + s"gain[${rootStats.calcGain(param)}]")
+    if (ctx.getTaskIndex == 0) {
+      updateNodeGradStats(0, rootStats)
+    }
+    val needFlushMatrices: util.Set[String] = new util.HashSet[String]()
+    needFlushMatrices.add(FPGBDTModel.NODE_GRAD_MAT)
+    clockAllMatrices(needFlushMatrices, true)
+  }
+
   // create new tree
   def createNewTree(): Unit = {
     LOG.info("------Create new tree------")
@@ -128,7 +157,9 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       this.nodePosEnd(nid) = -1
     }
     util.Arrays.fill(this.insToNode, 0)
-    // 7. set phase
+    // 7. cal grad pairs, sum up as root node grad stats, push to PS
+    calGradPairs()
+    // 8. set phase
     this.phase = FPGBDTPhase.CHOOSE_ACTIVE
     LOG.info(s"Create new tree cost ${System.currentTimeMillis() - createStart} ms")
   }
@@ -174,24 +205,44 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   }
 
   // run nodes to be split, cal grad and build hist
-  // TODO: multi-threading, batch building
   def runActiveNodes(): Unit = {
     LOG.info("------Run active node------")
     val start = System.currentTimeMillis()
     // 1. for each active node, cal grad and build hist
+    val sampleFeats: Array[Int] = this.fset.get(currentTree)
+    val numSampleFeats: Int = sampleFeats.length
+    val numSplit: Int = this.param.numSplit
+    val activeNodeSet: util.Set[Int] = new util.HashSet[Int]()
+    val histogramMap: util.Map[Int, DenseFloatVector] = this.histograms.get(this.currentTree)
     for (nid <- 0 until this.maxNodeNum) {
       if (this.activeNode(nid) == 1) {
-        // 1.1. cal grad for instances on current node
-        calGradPairs(nid)
-        // 1.2. set status to batch num
-        // TODO: multi-batch
-        this.activeNodeStat(nid) = 1
-        this.histograms.get(this.currentTree)
-          .put(nid, buildHistogram(nid))
+        // set status to batch num
+        // TODO: multi-thread
+        //this.activeNodeStat(nid) = 1
+        //this.histograms.get(this.currentTree)
+        //  .put(nid, buildHistogram(nid))
+        activeNodeSet.add(nid)
+        val hist = new DenseFloatVector(numSampleFeats * numSplit * 2)
+        histogramMap.put(nid, hist)
       }
     }
-    // 2. check if all nodes (threads) finished
-    var hasRunning: Boolean = true
+    val builders = new Array[HistogramBuilder](param.numThread)
+    LOG.info("Active nodes: " + activeNodeSet.toArray.mkString(" ,"))
+    for (i <- 0 until param.numThread) {
+      builders(i) = new HistogramBuilder(this, param, trainDataStore, activeNodeSet, i)
+      threadPool.submit(builders(i))
+    }
+    // 2. check if all threads finished
+    var allFinished: Boolean = false
+    do {
+      allFinished = true
+      var builderId: Int = 0
+      while (builderId < param.numThread && allFinished) {
+        allFinished &= builders(builderId).isFinished
+        builderId += 1
+      }
+    } while (!allFinished)
+    /*var hasRunning: Boolean = true
     do {
       hasRunning = false
       var nid: Int = 0
@@ -208,41 +259,10 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       if (hasRunning) {
         LOG.debug("Current has running thread(s)")
       }
-    } while (hasRunning)
+    } while (hasRunning)*/
     // 3. all finished, turn into next phase
     this.phase = FPGBDTPhase.FIND_SPLIT
     LOG.info(s"Run active node cost ${System.currentTimeMillis() - start} ms")
-  }
-
-  // calculate gradients of instances on specific node
-  def calGradPairs(nid: Int): Unit = {
-    LOG.info(s"------Calculate grad pairs of node[$nid]------")
-    val nodeStart: Int = this.nodePosStart(nid)
-    val nodeEnd: Int = this.nodePosEnd(nid)
-    for (posIdx <- nodeStart to nodeEnd) {
-      val insIdx: Int = nodeToIns(posIdx)
-      val pred: Float = trainDataStore.getPred(insIdx)
-      val label: Float = trainDataStore.getLabel(insIdx)
-      val weight: Float = trainDataStore.getWeight(insIdx)
-      val prob: Float = objective.transPred(pred)
-      val gradPair: GradPair = new GradPair(objective.firOrderGrad(prob, label) * weight,
-        objective.secOrderGrad(prob, label) * weight)
-      gradPairs(insIdx) = gradPair
-    }
-  }
-
-  // calculate gradients of all instances, used for level-wise training
-  def calGradPairs(): Unit = {
-    LOG.info(s"------Calculate grad pairs------")
-    for (insIdx <- 0 until trainDataStore.numInstance) {
-      val pred: Float = trainDataStore.getPred(insIdx)
-      val label: Float = trainDataStore.getLabel(insIdx)
-      val weight: Float = trainDataStore.getWeight(insIdx)
-      val prob: Float = objective.transPred(pred)
-      val gradPair: GradPair = new GradPair(objective.firOrderGrad(prob, label) * weight,
-        objective.secOrderGrad(prob, label) * weight)
-      gradPairs(insIdx) = gradPair
-    }
   }
 
   // build histogram for a node
@@ -253,24 +273,17 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     val sampleFeats: Array[Int] = this.fset.get(currentTree)
     val numSampleFeats: Int = sampleFeats.length
     val numSplit: Int = this.param.numSplit
-    val nodeStart: Int = nodePosStart(nid)
-    val nodeEnd: Int = nodePosEnd(nid)
     val histogram: DenseFloatVector = new DenseFloatVector(numSampleFeats * numSplit * 2)
-    // 2. sum up gradients
-    var gradSum: Float = 0.0f
-    var hessSum: Float = 0.0f
-    for (posIdx <- nodeStart to nodeEnd) {
-      val insIdx: Int = nodeToIns(posIdx)
-      val gradPair: GradPair = gradPairs(insIdx)
-      gradSum += gradPair.getGrad
-      hessSum += gradPair.getHess
-    }
+    // 2. get sum of grad & hess
+    val gradSum = this.forest(this.currentTree).stats.get(nid).sumGrad
+    val hessSum = this.forest(this.currentTree).stats.get(nid).sumHess
     // 3. build histograms
     for (i <- 0 until numSampleFeats) {
       // 3.1. get info of current feature
       val fid: Int = sampleFeats(i)
-      val indices: Array[Int] = trainDataStore.getFeatRow(fid).getIndices
-      val bins: Array[Int] = trainDataStore.getfeatBins(fid)
+      //val indices: Array[Int] = trainDataStore.getFeatRow(fid).getIndices
+      val indices: Array[Int] = trainDataStore.getFeatIndices(fid)
+      val bins: Array[Int] = trainDataStore.getFeatBins(fid)
       val nnz: Int = indices.length
       val gradOffset: Int = i * numSplit * 2
       val hessOffset: Int = gradOffset + numSplit
@@ -401,15 +414,6 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     needFlushMatrixSet.remove(FPGBDTModel.NODE_GRAD_MAT)
     if (ctx.getTaskIndex == 0) {
       // 3.1. pull local best splits
-      val workers: Array[Int] = (0 until param.numWorker).toArray
-      // com.tencent.angel.psagent.matrix.transport.MatrixTransportClient: RequestDispatcher is failed?
-      // NullPointerException at com.tencent.angel.ml.matrix.transport.GetRowsSplitRequest.getEstimizeDataSize(GetRowsSplitRequest.java:86)
-      //val splitFidMat = splitFid.getRows(workers).asInstanceOf[util.ArrayList[SparseIntVector]]
-      //LOG.info(s"Get split feature id matrix successfully, #row=${splitFidMat.size()}")
-      //val splitFvalueMat = splitFvalue.getRows(workers).asInstanceOf[util.ArrayList[SparseFloatVector]]
-      //LOG.info(s"Get split value matrix successfully, #row=${splitFvalueMat.size()}")
-      //val splitGainMat = splitGain.getRows(workers).asInstanceOf[util.ArrayList[SparseFloatVector]]
-      //LOG.info(s"Get split gain matrix successfully, #row=${splitGainMat.size()}")
       val splitFidMat: util.List[SparseIntVector] = new util.ArrayList[SparseIntVector](param.numWorker)
       val splitFvalueMat: util.List[SparseFloatVector] = new util.ArrayList[SparseFloatVector](param.numWorker)
       val splitGainMat: util.List[SparseFloatVector] = new util.ArrayList[SparseFloatVector](param.numWorker)
@@ -450,7 +454,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       val globalSplitGain = model.getPSModel(FPGBDTModel.GLOBAL_GAIN_MAT)
       globalSplitGain.increment(this.currentTree, splitGainVec)
     }
-    // 3.5. clock
+    // 3.4. clock
     needFlushMatrixSet.add(FPGBDTModel.GLOBAL_FEAT_MAT)
     needFlushMatrixSet.add(FPGBDTModel.GLOBAL_VALUE_MAT)
     needFlushMatrixSet.add(FPGBDTModel.GLOBAL_GAIN_MAT)
@@ -464,13 +468,16 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   def findLocalBestSplit(nid: Int): SplitEntry = {
     LOG.info(s"------To find the best split of node[$nid]------")
     val splitEntry: SplitEntry = new SplitEntry()
-    // 1. calculate the gradStats of the node
     val hist: DenseFloatVector = histograms.get(this.currentTree).get(nid)
     if (hist == null) {
       LOG.error(s"null histogram on node[$nid]")
       return splitEntry
     }
-    var gradSum: Float = 0.0f
+    // 1. calculate the gradStats of the node
+    val gradSum: Float = this.forest(this.currentTree).stats.get(nid).sumGrad
+    val hessSum: Float = this.forest(this.currentTree).stats.get(nid).sumHess
+    val nodeStats: GradStats = new GradStats(gradSum, hessSum)
+    /*var gradSum: Float = 0.0f
     var hessSum: Float = 0.0f
     for (i <- 0 until param.numSplit) {
       gradSum += hist.get(i)
@@ -481,7 +488,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       + s"gain[${nodeStats.calcGain(param)}]")
     if (nid == 0 && ctx.getTaskIndex == 0) {
       updateNodeGradStats(nid, nodeStats)
-    }
+    }*/
     // 2. loop over features
     val sampleFeats: Array[Int] = this.fset.get(this.currentTree)
     val numSampleFeats: Int = sampleFeats.length
@@ -569,8 +576,6 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     //resultModel.clock().get
     //sync()
     // 2.1. get split result of responsible nodes
-    // TODO: use BitSet
-    //var splitResult: Array[Int] = new Array[Int](trainDataStore.numInstance)
     for (nid <- 0 until this.maxNodeNum) {
       if (this.activeNode(nid) == 1) {
         val fid: Int = bestSplitFidVec.get(nid)
@@ -671,9 +676,10 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     var rightChildSumHess: Float = 0.0f
     if (nodeStart <= nodeEnd) {
       var rightCount: Int = 0
-      // TODO: use bins rather than values
-      val indices: Array[Int] = trainDataStore.getFeatRow(splitFid).getIndices
-      val values: Array[Double] = trainDataStore.getFeatRow(splitFid).getValues
+      //val indices: Array[Int] = trainDataStore.getFeatRow(splitFid).getIndices
+      //val values: Array[Double] = trainDataStore.getFeatRow(splitFid).getValues
+      val indices: Array[Int] = trainDataStore.getFeatIndices(splitFid)
+      val bins: Array[Int] = trainDataStore.getFeatBins(splitFid)
       val nnz: Int = indices.length
       // find out instances that should be in right child
       /*if (splitFvalue < 0.0) {
@@ -777,7 +783,8 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
           val index: Int = util.Arrays.binarySearch(indices, searchFrom, nnz, insIdx)
           // whether this instance has nonzero value on current feature
           if (index >= 0) {
-            if (values(index) > splitFvalue) { // feature value larger than split value
+            val insValue: Float = trainDataStore.getSplit(splitFid, bins(index))
+            if (insValue >= splitFvalue) {
               bitset.set(j)
               rightCount += 1
               rightChildSumGrad += this.gradPairs(insIdx).getGrad
@@ -806,7 +813,8 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
           // pick out the instances that should be in the left child
           var searchFrom: Int = nodeStart
           for (j <- 0 until nnz) {
-            if (values(j) <= splitFvalue) { // bi-search only when it <= splitFvalue
+            val insValue: Float = trainDataStore.getSplit(splitFid, bins(j))
+            if (insValue < splitFvalue) {
               val insIdx: Int = indices(j)
               //val index: Int = util.Arrays.binarySearch(
               //  this.nodeToIns, nodeStart, nodeEnd + 1, insIdx)
@@ -829,8 +837,9 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
           // default to left child
           var searchFrom: Int = nodeStart
           for (j <- 0 until nnz) {
-            if (values(j) > splitFvalue) { // bi-search only when it > splitFvalue
-            val insIdx: Int = indices(j)
+            val insValue: Float = trainDataStore.getSplit(splitFid, bins(j))
+            if (insValue >= splitFvalue) {
+              val insIdx: Int = indices(j)
               //val index: Int = util.Arrays.binarySearch(
               //  this.nodeToIns, nodeStart, nodeEnd + 1, insIdx)
               val index: Int = util.Arrays.binarySearch(
@@ -1013,10 +1022,10 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   def finishCurrentTree(globalMetrics: GlobalMetrics) {
     updateInsPreds()
     updateLeafPreds()
-    val train_error: Tuple1[Float] = eval(trainDataStore, true)
-    val valid: Tuple1[Float] = predict(validDataStore)
+    val train_error: Tuple1[Float] = eval(trainDataStore)
+    val valid_error: Tuple1[Float] = predict(validDataStore)
     globalMetrics.metric(MLConf.TRAIN_ERROR, train_error._1)
-    globalMetrics.metric(MLConf.VALID_ERROR, valid._1)
+    globalMetrics.metric(MLConf.VALID_ERROR, valid_error._1)
     this.currentTree += 1
 
     if (isFinished) {
@@ -1069,36 +1078,49 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   }
 
   // evaluate
-  def eval(dataStore: FPRegTDataStore, isTrainSet: Boolean): Tuple1[Float] = {
-    val descrip: String = if (isTrainSet) "training" else "validation"
+  def eval(dataStore: TrainDataStore): Tuple1[Float] = {
     LOG.info("------Evaluation------")
     val start = System.currentTimeMillis()
     val evalMetric = new LogErrorMetric
     val error: Float = evalMetric.eval(dataStore.getPreds, dataStore.getLabels)
-    LOG.info(s"Error on $descrip set after tree[${this.currentTree}]: $error")
+    LOG.info(s"Error on training dataset after tree[${this.currentTree}]: $error")
     LOG.info(s"Evaluation cost ${System.currentTimeMillis() - start} ms")
     new Tuple1[Float](error)
   }
 
   // predict
-  def predict(dataStore: FPRegTDataStore): Tuple1[Float] = {
+  def predict(dataStore: TestDataStore): Tuple1[Float] = {
     LOG.info("------Predict------")
-    new Tuple1[Float](Float.NaN)
-    /*val start = System.currentTimeMillis()
-
-    val splitFeat = model.getPSModel(FPGBDTModel.GLOBAL_FEAT_MAT)
-    val splitValue = model.getPSModel(FPGBDTModel.GLOBAL_VALUE_MAT)
-    val nodePreds = model.getPSModel(FPGBDTModel.NODE_PRED_MAT)
-
-    val splitFeatVec = splitFeat.getRow(this.currentTree).asInstanceOf[TIntVector]
-    val splitValueVec = splitValue.getRow(this.currentTree).asInstanceOf[TFloatVector]
-    val nodePredsVec = nodePreds.getRow(this.currentTree).asInstanceOf[TFloatVector]
-    LOG.info(s"Prediction of tree[${this.currentTree}]: ["
-      + nodePredsVec.getValues.mkString(", ") + "]")
-
-    val validInsPos: Array[Int] = new Array[Int](dataStore.numInstance)
-
-    new Tuple1[Float](0.0f)*/
+    val start = System.currentTimeMillis()
+    // 1. predict
+    val numValid: Int = dataStore.getNumInstances
+    for (i <- 0 until numValid) {
+      val x: SparseDoubleSortedVector = dataStore.getInstance(i)
+      var nid: Int = 0
+      var node: TNode = this.forest(this.currentTree).nodes.get(nid)
+      while (node != null && !node.isLeaf) {
+        val stat: RegTNodeStat = this.forest(this.currentTree).stats.get(nid)
+        val splitFid: Int = stat.splitEntry.getFid
+        val splitFvalue: Float = stat.splitEntry.getFvalue
+        if (x.get(splitFid) <= splitFvalue)
+          nid = nid * 2 + 1
+        else
+          nid = nid * 2 + 2
+        node = this.forest(this.currentTree).nodes.get(nid)
+      }
+      if (node.isLeaf) {
+        dataStore.preds(i) += node.getLeafValue
+      }
+      else {
+        LOG.error("Test instance gets into null node")
+      }
+    }
+    // 2. evaluation
+    val evalMetric = new LogErrorMetric
+    val error: Float = evalMetric.eval(dataStore.getPreds, dataStore.getLabels)
+    LOG.info(s"Error on validation dataset after tree[${this.currentTree}]: $error")
+    LOG.info(s"Predict cost ${System.currentTimeMillis() - start} ms")
+    new Tuple1[Float](error)
   }
 
   // set the tree phase

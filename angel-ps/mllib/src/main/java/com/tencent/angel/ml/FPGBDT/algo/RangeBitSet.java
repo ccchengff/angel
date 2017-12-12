@@ -1,10 +1,10 @@
 package com.tencent.angel.ml.FPGBDT.algo;
 
+import com.tencent.angel.common.Serialize;
 import io.netty.buffer.ByteBuf;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import java.io.Serializable;
 import java.util.List;
 
 /**
@@ -15,7 +15,7 @@ import java.util.List;
  * Efficient bit set for a given range [from, to]
  * The bits will be aligned to 8 automatically
  */
-public class RangeBitSet implements Serializable {
+public class RangeBitSet implements Serialize {
   private static final Log LOG = LogFactory.getLog(RangeBitSet.class);
 
   private byte[] bits;
@@ -137,6 +137,7 @@ public class RangeBitSet implements Serializable {
     return res;
   }
 
+  @Override
   public void serialize(ByteBuf buf) {
     buf.writeInt(from);
     buf.writeInt(to);
@@ -144,6 +145,7 @@ public class RangeBitSet implements Serializable {
     buf.writeBytes(bits);
   }
 
+  @Override
   public void deserialize(ByteBuf buf) {
     from = buf.readInt();
     to = buf.readInt();
@@ -153,6 +155,7 @@ public class RangeBitSet implements Serializable {
     buf.readBytes(bits);
   }
 
+  @Override
   public int bufferLen() {
     return 12 + bits.length;
   }

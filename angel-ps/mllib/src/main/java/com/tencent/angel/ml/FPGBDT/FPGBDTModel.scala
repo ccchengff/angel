@@ -2,6 +2,7 @@ package com.tencent.angel.ml.FPGBDT
 
 import com.tencent.angel.conf.AngelConf
 import com.tencent.angel.ml.FPGBDT.FPGBDTModel._
+import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.{HeapQuantileSketch, SketchUtils}
 import com.tencent.angel.ml.conf.MLConf
 import com.tencent.angel.ml.feature.LabeledData
 import com.tencent.angel.ml.math.vector.{TIntDoubleVector, TIntVector}
@@ -19,6 +20,8 @@ import org.apache.hadoop.conf.Configuration
   */
 object FPGBDTModel {
   val SYNC: String = "fgbdt.sync"
+  val NNZ_NUM_MAT: String = "fpgbdt.nnz.num"
+  val SKETCH_MAT: String = "fpgbdt.quantile.sketch"
   val TOTAL_SAMPLE_NUM: String = "fpgbdt.total.sample.num"
   val FEAT_NNZ_MAT: String = "fpgbdt.feature.nnz"
   val LABEL_MAT: String = "fpgbdt.label"
@@ -50,6 +53,7 @@ class FPGBDTModel(conf: Configuration, _ctx: TaskContext = null) extends MLModel
   var featNum = conf.getInt(MLConf.ML_FEATURE_NUM, 10000)
   val maxTreeNum = conf.getInt(MLConf.ML_GBDT_TREE_NUM, MLConf.DEFAULT_ML_GBDT_TREE_NUM)
   val maxTreeDepth = conf.getInt(MLConf.ML_GBDT_TREE_DEPTH, MLConf.DEFAULT_ML_GBDT_TREE_DEPTH)
+  val splitNum = conf.getInt(MLConf.ML_GBDT_SPLIT_NUM, MLConf.DEFAULT_ML_GBDT_SPLIT_NUM)
   //val featSampleRatio = conf.getFloat(MLConf.ML_GBDT_SAMPLE_RATIO, MLConf.DEFAULT_ML_GBDT_SAMPLE_RATIO)
 
   val maxTNodeNum: Int = Maths.pow(2, maxTreeDepth) - 1
@@ -79,6 +83,21 @@ class FPGBDTModel(conf: Configuration, _ctx: TaskContext = null) extends MLModel
     .setOplogType("DENSE_INT")
     .setNeedSave(false)
   addPSModel(TOTAL_SAMPLE_NUM, totalSampleVec)
+
+  // Matrix xxx: #nonzero for each feature
+  val nonzeroNumVec = PSModel(NNZ_NUM_MAT, 1, featNum, 1, featNum / psNumber)
+    .setRowType(RowType.T_INT_DENSE)
+    .setOplogType("DENSE_INT")
+    .setNeedSave(false)
+  addPSModel(NNZ_NUM_MAT, nonzeroNumVec)
+
+  // Matrix xxx: quantile sketch
+  val bufCapacity = SketchUtils.needBufferCapacity(HeapQuantileSketch.DEFAULT_K, trainDataNum.toLong)
+  val sketch = PSModel(SKETCH_MAT, featNum, bufCapacity, featNum / psNumber, bufCapacity)
+    .setRowType(RowType.T_FLOAT_DENSE)
+    .setOplogType("DENSE_FLOAT")
+    .setNeedSave(false)
+  addPSModel(SKETCH_MAT, sketch)
 
   // Matrix 0-1: feature to instance
   val featRow = PSModel(FEAT_NNZ_MAT, featNum, trainDataNum, featNum / psNumber, trainDataNum)

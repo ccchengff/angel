@@ -6,6 +6,7 @@ import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch;
 import com.tencent.angel.ml.matrix.psf.update.enhance.PartitionUpdateParam;
 import com.tencent.angel.ml.matrix.psf.update.enhance.UpdateFunc;
 import com.tencent.angel.ml.matrix.psf.update.enhance.UpdateParam;
+import com.tencent.angel.ml.utils.Maths;
 import com.tencent.angel.ps.impl.PSContext;
 import com.tencent.angel.ps.impl.matrix.ServerDenseFloatRow;
 import com.tencent.angel.ps.impl.matrix.ServerPartition;
@@ -22,34 +23,35 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Created by ccchengff on 2017/11/30.
+ * Created by ccchengff on 2017/12/12.
  */
-public class QSketchMergeFunc extends UpdateFunc {
-  private static final Log LOG = LogFactory.getLog(QSketchMergeFunc.class);
+public class QSketchesMergeFunc extends UpdateFunc {
+  private static final Log LOG = LogFactory.getLog(QSketchesMergeFunc.class);
 
-  public QSketchMergeFunc(QSketchMergeParam param) {
+  public QSketchesMergeFunc(QSketchesMergeParam param) {
     super(param);
   }
 
-  public QSketchMergeFunc() {
+  public QSketchesMergeFunc() {
     super(null);
   }
 
-  public static class QSketchMergeParam extends UpdateParam {
-    protected int rowId;
+  public static class QSketchesMergeParam extends UpdateParam {
+    protected int[] rowIndexes;
     protected int numWorker;
     protected int numQuantile;
-    protected HeapQuantileSketch qs;
-    protected long estimateN;
+    protected HeapQuantileSketch[] sketches;
+    protected long[] estimateNs;
 
-    public QSketchMergeParam(int matrixId, boolean updateClock, int rowId, int numWorker,
-                             int numQuantile, HeapQuantileSketch qs, long estimateN) {
+    public QSketchesMergeParam(int matrixId, boolean updateClock, int[] rowIndexes,
+                               int numWorker, int numQuantile,
+                               HeapQuantileSketch[] sketches, long[] estimateNs) {
       super(matrixId, updateClock);
-      this.rowId = rowId;
+      this.rowIndexes = rowIndexes;
       this.numWorker = numWorker;
       this.numQuantile = numQuantile;
-      this.qs = qs;
-      this.estimateN = estimateN;
+      this.sketches = sketches;
+      this.estimateNs = estimateNs;
     }
 
     /**
@@ -65,9 +67,21 @@ public class QSketchMergeFunc extends UpdateFunc {
       List<PartitionUpdateParam> partParamList = new ArrayList<>(size);
       for (int i = 0; i < size; i++) {
         PartitionKey partKey = partList.get(i);
-        if (partKey.getStartRow() <= rowId && partKey.getEndRow() > rowId) {
-          partParamList.add(new QSketchPartitionMergeParam(matrixId, partKey, updateClock,
-                  rowId, numWorker, numQuantile, qs, estimateN));
+        List<Integer> partRowIndexes = new ArrayList<>();
+        List<HeapQuantileSketch> partSketches = new ArrayList<>();
+        List<Long> partEstimateNs = new ArrayList<>();
+        for (int j = 0; j < rowIndexes.length; j++) {
+          if (partKey.getStartRow() <= rowIndexes[j] && partKey.getEndRow() > rowIndexes[j]) {
+            partRowIndexes.add(rowIndexes[j]);
+            partSketches.add(sketches[j]);
+            partEstimateNs.add(estimateNs[j]);
+          }
+        }
+        if (partRowIndexes.size() > 0) {
+          partParamList.add(new QSketchesPartitionMergeParam(matrixId, partKey, updateClock,
+                  Maths.intList2Arr(partRowIndexes), numWorker, numQuantile,
+                  partSketches.toArray(new HeapQuantileSketch[partSketches.size()]),
+                  Maths.longList2Arr(partEstimateNs)));
         }
       }
       return partParamList;
@@ -75,56 +89,70 @@ public class QSketchMergeFunc extends UpdateFunc {
 
   }
 
-  public static class QSketchPartitionMergeParam extends PartitionUpdateParam {
-    protected int rowId;
+  public static class QSketchesPartitionMergeParam extends PartitionUpdateParam {
+    protected int[] rowIndexes;
     protected int numWorker;
     protected int numQuantile;
-    protected HeapQuantileSketch qs;
-    protected long estimateN;
+    protected HeapQuantileSketch[] sketches;
+    protected long[] estimateNs;
 
-    public QSketchPartitionMergeParam(int matrixId, PartitionKey partKey, boolean updateClock,
-                                      int rowId, int numWorker, int numQuantile,
-                                      HeapQuantileSketch qs, long estimateN) {
+    public QSketchesPartitionMergeParam(int matrixId, PartitionKey partKey, boolean updateClock,
+                                        int[] rowIndexes, int numWorker, int numQuantile,
+                                        HeapQuantileSketch[] sketches, long[] estimateNs) {
       super(matrixId, partKey, updateClock);
-      this.rowId = rowId;
+      this.rowIndexes = rowIndexes;
       this.numWorker = numWorker;
       this.numQuantile = numQuantile;
-      this.qs = qs;
-      this.estimateN = estimateN;
+      this.sketches = sketches;
+      this.estimateNs = estimateNs;
     }
 
-    public QSketchPartitionMergeParam() {
+    public QSketchesPartitionMergeParam() {
       super();
-      this.rowId = -1;
+      this.rowIndexes = null;
       this.numWorker = -1;
       this.numQuantile = -1;
-      this.qs = null;
-      this.estimateN = -1;
+      this.sketches = null;
+      this.estimateNs = null;
     }
 
     @Override
     public void serialize(ByteBuf buf) {
       super.serialize(buf);
-      buf.writeInt(rowId);
+      int size = rowIndexes.length;
+      buf.writeInt(size);
+      for (int i = 0; i < size; i++) {
+        buf.writeInt(rowIndexes[i]);
+        sketches[i].serialize(buf);
+        buf.writeLong(estimateNs[i]);
+      }
       buf.writeInt(numWorker);
       buf.writeInt(numQuantile);
-      qs.serialize(buf);
-      buf.writeLong(estimateN);
     }
 
     @Override
     public void deserialize(ByteBuf buf) {
       super.deserialize(buf);
-      this.rowId = buf.readInt();
-      this.numWorker = buf.readInt();
-      this.numQuantile = buf.readInt();
-      this.qs = new HeapQuantileSketch(buf);
-      this.estimateN = buf.readLong();
+      int size = buf.readInt();
+      rowIndexes = new int[size];
+      sketches = new HeapQuantileSketch[size];
+      estimateNs = new long[size];
+      for (int i = 0; i < size; i++) {
+        rowIndexes[i] = buf.readInt();
+        sketches[i] = new HeapQuantileSketch(buf);
+        estimateNs[i] = buf.readLong();
+      }
+      numWorker = buf.readInt();
+      numQuantile = buf.readInt();
     }
 
     @Override
     public int bufferLen() {
-      return super.bufferLen() + 20 + qs.bufferLen();
+      int res = super.bufferLen() + 12 + rowIndexes.length * 12;
+      for (HeapQuantileSketch sketch: sketches) {
+        res += sketch.bufferLen();
+      }
+      return res;
     }
   }
 
@@ -140,38 +168,41 @@ public class QSketchMergeFunc extends UpdateFunc {
                     .getPartition(partParam.getMatrixId(), partParam.getPartKey().getPartitionId());
 
     if (part != null) {
-      QSketchPartitionMergeParam param = (QSketchPartitionMergeParam)partParam;
+      QSketchesPartitionMergeParam param = (QSketchesPartitionMergeParam) partParam;
       int startRow = part.getPartitionKey().getStartRow();
       int endRow = part.getPartitionKey().getEndRow();
-      if (startRow <= param.rowId && endRow > param.rowId) {
-        ServerRow row = part.getRow(param.rowId);
-        if (row == null) {
-          throw new AngelException("Get null row: " + param.rowId);
-        }
-        switch (row.getRowType()) {
-          case T_FLOAT_DENSE:
-            qsketchMerge((ServerDenseFloatRow) row, param);
-            break;
+      for (int i = 0; i < param.rowIndexes.length; i++) {
+        if (startRow <= param.rowIndexes[i] && endRow > param.rowIndexes[i]) {
+          ServerRow row = part.getRow(param.rowIndexes[i]);
+          if (row == null) {
+            throw new AngelException("Get null row: " + param.rowIndexes[i]);
+          }
+          switch (row.getRowType()) {
+            case T_FLOAT_DENSE:
+              qsketchMerge((ServerDenseFloatRow) row, param, i);
+              break;
 
-          default:
-            break;
+            default:
+              break;
+          }
         }
       }
     }
   }
 
-  private void qsketchMerge(ServerDenseFloatRow row, QSketchPartitionMergeParam partParam) {
+  private void qsketchMerge(ServerDenseFloatRow row, QSketchesPartitionMergeParam partParam, int index) {
     try {
       row.getLock().writeLock().lock();
       // read sketch from row data, merge sketch
       HeapQuantileSketch qs1 = null;
-      HeapQuantileSketch qs2 = partParam.qs;
+      HeapQuantileSketch qs2 = partParam.sketches[index];
       byte[] data = row.getDataArray();
       ByteBuffer buf = ByteBuffer.wrap(data);
       buf.mark();
       int numMerged = buf.getInt();
+      if (numMerged == partParam.numWorker) numMerged = 0;
       if (numMerged == 0)
-        qs1 = new HeapQuantileSketch(qs2.getK(), partParam.estimateN);
+        qs1 = new HeapQuantileSketch(qs2.getK(), partParam.estimateNs[index]);
       else
         qs1 = new HeapQuantileSketch(buf);
       LOG.debug(String.format("Row[%d] before merge[%d]: k[%d, %d], n[%d, %d], estimateN[%d, %d]",
@@ -193,8 +224,10 @@ public class QSketchMergeFunc extends UpdateFunc {
         float[] quantiles = qs1.getQuantiles(partParam.numQuantile);
         //LOG.info("Row[" + row.getRowId() + "] quantiles: " + Arrays.toString(quantiles));
         FloatBuffer writeBuf = row.getData();
+        writeBuf.mark();
         writeBuf.put(Float.intBitsToFloat(numMerged));
         writeBuf.put(quantiles);
+        writeBuf.reset();
       }
     } finally {
       row.getLock().writeLock().unlock();

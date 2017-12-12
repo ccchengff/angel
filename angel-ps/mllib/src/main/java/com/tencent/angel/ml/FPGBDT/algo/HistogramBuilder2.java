@@ -14,8 +14,8 @@ import java.util.Set;
 /**
  * Created by ccchengff on 2017/12/1.
  */
-public class HistogramBuilder implements Runnable {
-  private static final Log LOG = LogFactory.getLog(HistogramBuilder.class);
+public class HistogramBuilder2 implements Runnable {
+  private static final Log LOG = LogFactory.getLog(HistogramBuilder2.class);
 
   private FPGBDTParam param;
   private TrainDataStore trainDataStore;
@@ -30,10 +30,10 @@ public class HistogramBuilder implements Runnable {
   private int builderId;
   private boolean finished;
 
-  public HistogramBuilder(FPGBDTParam param, TrainDataStore trainDataStore,
-                          int[] sampleFeats, int[] insToNode, GradPair[] gradPairs,
-                          Set<Integer> activeNodeSet, Map<Integer, RegTNodeStat> nodeStatMap,
-                          Map<Integer, DenseFloatVector> histogramMap, int builderId) {
+  public HistogramBuilder2(FPGBDTParam param, TrainDataStore trainDataStore,
+                           int[] sampleFeats, int[] insToNode, GradPair[] gradPairs,
+                           Set<Integer> activeNodeSet, Map<Integer, RegTNodeStat> nodeStatMap,
+                           Map<Integer, DenseFloatVector> histogramMap, int builderId) {
     this.param = param;
     this.trainDataStore = trainDataStore;
     this.sampleFeats = sampleFeats;

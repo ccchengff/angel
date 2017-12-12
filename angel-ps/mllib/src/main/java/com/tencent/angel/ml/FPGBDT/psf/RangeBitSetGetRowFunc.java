@@ -87,7 +87,7 @@ public class RangeBitSetGetRowFunc extends GetRowFunc {
     }
 
     public RangeBitSetPartitionGetParam() {
-      super(0, null);
+      super(-1, null);
       this.rowId = -1;
       this.from = -1;
       this.to = -1;
@@ -107,6 +107,11 @@ public class RangeBitSetGetRowFunc extends GetRowFunc {
       this.rowId = buf.readInt();
       this.from = buf.readInt();
       this.to = buf.readInt();
+    }
+
+    @Override
+    public int bufferLen() {
+      return super.bufferLen() + 12;
     }
   }
 

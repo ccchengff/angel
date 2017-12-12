@@ -1,4 +1,4 @@
-package com.tencent.angel.ml.FPGBDT.algo.FPRegTree
+package com.tencent.angel.ml.FPGBDT.algo.FPRegTreeDataStore
 
 import java.util
 
@@ -11,13 +11,14 @@ import org.apache.commons.logging.LogFactory
 /**
   * Created by ccchengff on 2017/11/16.
   */
-class FPRegTDataStore(param: FPGBDTParam, _numInstance: Int) {
-  val LOG = LogFactory.getLog(classOf[FPRegTDataStore])
+class TrainDataStore(param: FPGBDTParam, _numInstance: Int) {
+  val LOG = LogFactory.getLog(classOf[TrainDataStore])
 
   private val numFeature: Int = param.featHi - param.featLo
-  var numInstance: Int = _numInstance
+  val numInstance: Int = _numInstance
 
   private val featRows = new Array[SparseDoubleSortedVector](numFeature)
+  private val featIndices = new Array[Array[Int]](numFeature)
   private val featBins = new Array[Array[Int]](numFeature)
   private val splits = new Array[Array[Float]](numFeature)
   private val zeroBins = new Array[Int](numFeature)
@@ -25,7 +26,7 @@ class FPRegTDataStore(param: FPGBDTParam, _numInstance: Int) {
   var preds: Array[Float] = _
   var weights: Array[Float] = _
 
-  def getFeatRow(fid: Int) = featRows(fid - param.featLo)
+  //def getFeatRow(fid: Int) = featRows(fid - param.featLo)
 
   def setFeatureRow(fid: Int, featRow: SparseDoubleSortedVector): Unit = {
     this.featRows(fid - param.featLo) = featRow
@@ -73,8 +74,11 @@ class FPRegTDataStore(param: FPGBDTParam, _numInstance: Int) {
       for (ins <- 0 until nnz) {
         featBins(i)(ins) = indexOf(values(ins).toFloat, splits(i), zeroBins(i))
       }
+      // 4. for memory efficient
+      featIndices(i) = featRows(i).getIndices.clone()
+      featRows(i).clear()
     }
-    LOG.info(s"Feature range: [${param.featLo}-${param.featHi}], min nnz=$minNnz, max nnz=$maxNnz")
+    LOG.info(s"Feature range: [${param.featLo}-${param.featHi}), min nnz=$minNnz, max nnz=$maxNnz")
   }
 
   def findZeroBin(arr: Array[Float]): Int = {
@@ -119,7 +123,9 @@ class FPRegTDataStore(param: FPGBDTParam, _numInstance: Int) {
     zeroIdx
   }
 
-  def getfeatBins(fid: Int) = featBins(fid - param.featLo)
+  def getFeatIndices(fid: Int) = featIndices(fid - param.featLo)
+
+  def getFeatBins(fid: Int) = featBins(fid - param.featLo)
 
   def getSplit(fid: Int, splitIdx: Int) = splits(fid - param.featLo)(splitIdx)
 

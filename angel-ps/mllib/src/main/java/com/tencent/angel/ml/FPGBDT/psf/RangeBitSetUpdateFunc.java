@@ -109,6 +109,11 @@ public class RangeBitSetUpdateFunc extends UpdateFunc {
         offset = -1;
       }
     }
+
+    @Override
+    public int bufferLen() {
+      return super.bufferLen() + bitset.bufferLen() + 4;
+    }
   }
 
   /**
