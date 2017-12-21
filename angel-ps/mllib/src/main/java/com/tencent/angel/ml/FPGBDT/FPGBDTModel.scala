@@ -84,23 +84,28 @@ class FPGBDTModel(conf: Configuration, _ctx: TaskContext = null) extends MLModel
     .setNeedSave(false)
   addPSModel(TOTAL_SAMPLE_NUM, totalSampleVec)
 
-  // Matrix xxx: #nonzero for each feature
-  val nonzeroNumVec = PSModel(NNZ_NUM_MAT, 1, featNum, 1, featNum / psNumber)
+  // Matrix xxx: #nonzero for each feature of each worker
+  val nonzeroNumVec = PSModel(NNZ_NUM_MAT, wokergroupNumber, featNum, 1, featNum)
     .setRowType(RowType.T_INT_DENSE)
     .setOplogType("DENSE_INT")
     .setNeedSave(false)
   addPSModel(NNZ_NUM_MAT, nonzeroNumVec)
 
   // Matrix xxx: quantile sketch
+  var transposeBatchSize: Int = 1000
+  if (transposeBatchSize == -1 || transposeBatchSize > featNum)
+    transposeBatchSize = featNum
   val bufCapacity = SketchUtils.needBufferCapacity(HeapQuantileSketch.DEFAULT_K, trainDataNum.toLong)
-  val sketch = PSModel(SKETCH_MAT, featNum, bufCapacity, featNum / psNumber, bufCapacity)
+  val featureRowBufSize = 8 * trainDataNum
+  val tmp = Math.max(bufCapacity, featureRowBufSize)
+  val sketch = PSModel(SKETCH_MAT, transposeBatchSize, tmp, transposeBatchSize / psNumber, tmp)
     .setRowType(RowType.T_FLOAT_DENSE)
     .setOplogType("DENSE_FLOAT")
     .setNeedSave(false)
   addPSModel(SKETCH_MAT, sketch)
 
   // Matrix 0-1: feature to instance
-  val featRow = PSModel(FEAT_NNZ_MAT, featNum, trainDataNum, featNum / psNumber, trainDataNum)
+  val featRow = PSModel(FEAT_NNZ_MAT, 1, trainDataNum, 1, trainDataNum / psNumber)
     .setRowType(RowType.T_DOUBLE_SPARSE)
     .setOplogType("SPARSE_DOUBLE")
     .setHogwild(true)

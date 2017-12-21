@@ -20,8 +20,10 @@ class TrainDataStore(param: FPGBDTParam, _numInstance: Int) {
   private val featRows = new Array[SparseDoubleSortedVector](numFeature)
   private val featIndices = new Array[Array[Int]](numFeature)
   private val featBins = new Array[Array[Int]](numFeature)
-  private val splits = new Array[Array[Float]](numFeature)
-  private val zeroBins = new Array[Int](numFeature)
+  //private val splits = new Array[Array[Float]](numFeature)
+  //private val zeroBins = new Array[Int](numFeature)
+  private val splits = new Array[Array[Float]](param.numFeature)
+  private val zeroBins = new Array[Int](param.numFeature)
   var labels: Array[Float] = _
   var preds: Array[Float] = _
   var weights: Array[Float] = _
@@ -123,11 +125,28 @@ class TrainDataStore(param: FPGBDTParam, _numInstance: Int) {
     zeroIdx
   }
 
+  def indexOf(x: Float, fid: Int): Int = {
+    indexOf(x, splits(fid), zeroBins(fid))
+  }
+
   def getFeatIndices(fid: Int) = featIndices(fid - param.featLo)
+
+  /*def setFeatIndices(fid: Int, indices: Array[Int]): Unit = {
+    featIndices(fid - param.featLo) = indices
+  }*/
 
   def getFeatBins(fid: Int) = featBins(fid - param.featLo)
 
-  def getSplit(fid: Int, splitIdx: Int) = splits(fid - param.featLo)(splitIdx)
+  /*def setFeatBins(fid: Int, bins: Array[Int]): Unit = {
+    featBins(fid - param.featLo) = bins
+  }*/
+
+  def setFeatureRow(fid: Int, indices: Array[Int], bins: Array[Int]): Unit = {
+    featIndices(fid - param.featLo) = indices
+    featBins(fid - param.featLo) = bins
+  }
+
+  /*def getSplit(fid: Int, splitIdx: Int) = splits(fid - param.featLo)(splitIdx)
 
   def getSplits(fid: Int) = splits(fid - param.featLo)
 
@@ -135,7 +154,18 @@ class TrainDataStore(param: FPGBDTParam, _numInstance: Int) {
     this.splits(fid - param.featLo) = splits
   }
 
-  def getZeroBin(fid: Int) = zeroBins(fid - param.featLo)
+  def getZeroBin(fid: Int) = zeroBins(fid - param.featLo)*/
+
+  def getSplit(fid: Int, splitIdx: Int) = splits(fid)(splitIdx)
+
+  def getSplits(fid: Int) = splits(fid)
+
+  def setSplits(fid: Int, splits: Array[Float]): Unit = {
+    this.splits(fid) = splits
+    this.zeroBins(fid) = findZeroBin(splits)
+  }
+
+  def getZeroBin(fid: Int) = zeroBins(fid)
 
   def getZeroBins = zeroBins
 

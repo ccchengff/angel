@@ -11,7 +11,6 @@ import com.tencent.angel.ml.FPGBDT.psf._
 import com.tencent.angel.ml.FPGBDT.psf.ClearUpdate.ClearUpdateParam
 import com.tencent.angel.ml.FPGBDT.psf.QSketchGetFunc.QSketchGetParam
 import com.tencent.angel.ml.FPGBDT.psf.QSketchMergeFunc.QSketchMergeParam
-import com.tencent.angel.ml.FPGBDT.psf.QSketchesGetFunc.QSketchesGetParam
 import com.tencent.angel.ml.FPGBDT.psf.QSketchesMergeFunc.QSketchesMergeParam
 import com.tencent.angel.ml.MLLearner
 import com.tencent.angel.ml.conf.MLConf
@@ -525,7 +524,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     needFlushMatrices.add(FPGBDTModel.SKETCH_MAT)
 
     var transposeBatchSize: Int = 1000
-    if (transposeBatchSize == -1)
+    if (transposeBatchSize == -1 || transposeBatchSize > numFeature)
       transposeBatchSize = numFeature
     var fid: Int = 0
     var rowIndexes = (0 until transposeBatchSize).toArray
@@ -552,9 +551,10 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       }
       // 3.2.2. push to PS and merge on PS
       sketchModel.update(new QSketchesMergeFunc(new QSketchesMergeParam(
-        matrixId, true, rowIndexes, numWorker, numSplit, sketches, estimateNs)))
+        matrixId, true, rowIndexes, numWorker, numSplit, sketches, estimateNs))).get
       FPGBDTLearner.sync(model)
-      // 3.2.3. pull quantiles
+      LOG.info("Push sketches finished")
+      // 3.2.3. pull quantiles from PS
       var getRowIndexes: Array[Int] = rowIndexes.clone()
       while (getRowIndexes != null) {
         val getResult = sketchModel.get(new QSketchesGetFunc(
@@ -562,12 +562,14 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
         val retryList: util.List[Int] = new util.ArrayList[Int]()
         for (rowId <- rowIndexes) {
           val quantiles: Array[Float] = getResult.getQuantiles(rowId)
+          fid = rowId + start
           if (quantiles == null) {
-            LOG.info(s"Feature[${rowId + start} need to try again]")
+            LOG.info(s"Feature[$fid] need to try again")
             retryList.add(rowId)
           }
           else {
-            LOG.info(s"Feature[${rowId + start}] quantiles: [" + quantiles.mkString(", ") + "]")
+            fpDataStore.setSplits(fid, quantiles)
+            //LOG.info(s"Feature[$fid] quantiles: [" + quantiles.mkString(", ") + "]")
           }
         }
         if (retryList.size() > 0) {
@@ -580,6 +582,41 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
         }
       }
       FPGBDTLearner.sync(model)
+      LOG.info("Pull sketches finished")
+      // 3.2.3. find bin indexes
+      val setFeatureRowParam = new FeatureRowsUpdateParam[Byte](matrixId, true,
+          numWorker, ctx.getTaskIndex, transposeBatchSize, numSplit)
+      for (rowId <- rowIndexes) {
+        fid = rowId + start
+        val nnz: Int = featValues(fid).size()
+        val fIndices: Array[Int] = new Array[Int](nnz)
+        val fBins: Array[Int] = new Array[Int](nnz)
+        for (i <- 0 until nnz) {
+          fIndices(i) = featIndices(fid).get(i) + offset
+          fBins(i) = fpDataStore.indexOf(featValues(fid).get(i), fid)
+        }
+        setFeatureRowParam.set(rowId, fIndices, fBins)
+      }
+      // 3.2.4. push to PS
+      sketchModel.update(new FeatureRowsUpdateFunc(setFeatureRowParam)).get
+      FPGBDTLearner.sync(model)
+      LOG.info("Push feature rows finished")
+      // 3.2.5. pull feature rows from PS
+      if (param.featLo < stop && param.featHi > start) {
+        val getRowIndexes = (Math.max(param.featLo, start) until Math.min(param.featHi, stop)).toArray
+        val featureRows = sketchModel.get(new FeatureRowsGetFunc[Byte](matrixId, numWorker,
+          getRowIndexes, numSplit)).asInstanceOf[FeatureRowsGetResult].getFeatureRows
+        val iter = featureRows.entrySet().iterator()
+        while (iter.hasNext) {
+          val entry = iter.next()
+          fid = entry.getKey + start
+          val (indices, bins) = entry.getValue
+          fpDataStore.setFeatureRow(fid, indices, bins)
+        }
+      }
+      FPGBDTLearner.sync(model)
+      LOG.info("Pull feature rows finished")
+      fid = stop
     }
     LOG.info(s"Get feature rows cost ${System.currentTimeMillis() - createStart} ms")
     if (1 == 1) return fpDataStore
