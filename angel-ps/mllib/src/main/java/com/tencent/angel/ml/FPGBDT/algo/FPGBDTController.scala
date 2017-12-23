@@ -31,7 +31,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   val forest: Array[RegTree] = new Array[RegTree](param.numTree)
   var currentTree: Int = 0
   val maxNodeNum: Int = Maths.pow(2, param.maxDepth) - 1
-  var phase: Int = FPGBDTPhase.CREATE_SKETCH
+  var phase: Int = FPGBDTPhase.NEW_TREE
 
   //val objFunc: ObjFunc = new RegLossObj(new Loss.BinaryLogisticLoss)
   //var gradPairs: util.List[GradPair] = new util.ArrayList[GradPair]()
@@ -60,11 +60,11 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
 
   val threadPool: ExecutorService = Executors.newFixedThreadPool(param.numThread)
 
-  // find splits for each feature, try to do this during dataset transpose process
+  /*// find splits for each feature, try to do this during dataset transpose process
   def createSketch(): Unit = {
     trainDataStore.createSketch(param.numSplit, 1)
     this.phase = FPGBDTPhase.NEW_TREE
-  }
+  }*/
 
   // sample features for current tree
   // TODO: sample features via feature importance
@@ -209,40 +209,40 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     LOG.info("------Run active node------")
     val start = System.currentTimeMillis()
     // 1. for each active node, cal grad and build hist
-    val sampleFeats: Array[Int] = this.fset.get(currentTree)
-    val numSampleFeats: Int = sampleFeats.length
-    val numSplit: Int = this.param.numSplit
-    val activeNodeSet: util.Set[Int] = new util.HashSet[Int]()
-    val histogramMap: util.Map[Int, DenseFloatVector] = this.histograms.get(this.currentTree)
+    //val sampleFeats: Array[Int] = this.fset.get(currentTree)
+    //val numSampleFeats: Int = sampleFeats.length
+    //val numSplit: Int = this.param.numSplit
+    //val activeNodeSet: util.Set[Int] = new util.HashSet[Int]()
+    //val histogramMap: util.Map[Int, DenseFloatVector] = this.histograms.get(this.currentTree)
     for (nid <- 0 until this.maxNodeNum) {
       if (this.activeNode(nid) == 1) {
         // set status to batch num
         // TODO: multi-thread
-        //this.activeNodeStat(nid) = 1
-        //this.histograms.get(this.currentTree)
-        //  .put(nid, buildHistogram(nid))
-        activeNodeSet.add(nid)
-        val hist = new DenseFloatVector(numSampleFeats * numSplit * 2)
-        histogramMap.put(nid, hist)
+        this.activeNodeStat(nid) = 1
+        this.histograms.get(this.currentTree)
+          .put(nid, buildHistogram(nid))
+        //activeNodeSet.add(nid)
+        //val hist = new DenseFloatVector(numSampleFeats * numSplit * 2)
+        //histogramMap.put(nid, hist)
       }
     }
-    val builders = new Array[HistogramBuilder](param.numThread)
-    LOG.info("Active nodes: " + activeNodeSet.toArray.mkString(" ,"))
-    for (i <- 0 until param.numThread) {
-      builders(i) = new HistogramBuilder(this, param, trainDataStore, activeNodeSet, i)
-      threadPool.submit(builders(i))
-    }
+    //val builders = new Array[HistogramBuilder](param.numThread)
+    //LOG.info("Active nodes: " + activeNodeSet.toArray.mkString(" ,"))
+    //for (i <- 0 until param.numThread) {
+    //  builders(i) = new HistogramBuilder(this, param, trainDataStore, activeNodeSet, i)
+    //  threadPool.submit(builders(i))
+    //}
     // 2. check if all threads finished
-    var allFinished: Boolean = false
-    do {
-      allFinished = true
-      var builderId: Int = 0
-      while (builderId < param.numThread && allFinished) {
-        allFinished &= builders(builderId).isFinished
-        builderId += 1
-      }
-    } while (!allFinished)
-    /*var hasRunning: Boolean = true
+    //var allFinished: Boolean = false
+    //do {
+    //  allFinished = true
+    //  var builderId: Int = 0
+    //  while (builderId < param.numThread && allFinished) {
+    //    allFinished &= builders(builderId).isFinished
+    //    builderId += 1
+    //  }
+    //} while (!allFinished)
+    var hasRunning: Boolean = true
     do {
       hasRunning = false
       var nid: Int = 0
@@ -259,7 +259,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       if (hasRunning) {
         LOG.debug("Current has running thread(s)")
       }
-    } while (hasRunning)*/
+    } while (hasRunning)
     // 3. all finished, turn into next phase
     this.phase = FPGBDTPhase.FIND_SPLIT
     LOG.info(s"Run active node cost ${System.currentTimeMillis() - start} ms")

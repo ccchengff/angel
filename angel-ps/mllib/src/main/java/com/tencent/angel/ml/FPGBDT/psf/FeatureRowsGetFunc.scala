@@ -14,7 +14,7 @@ import org.apache.commons.logging.{Log, LogFactory}
 /**
   * Created by ccchengff on 2017/12/16.
   */
-class FeatureRowsGetFunc[T <: scala.AnyVal](param: FeatureRowsGetParam[T]) extends GetFunc(param) {
+class FeatureRowsGetFunc[@specialized(Byte, Short, Int) T <: scala.AnyVal](param: FeatureRowsGetParam[T]) extends GetFunc(param) {
   val LOG: Log = LogFactory.getLog(classOf[FeatureRowsGetFunc[T]])
 
   def this() = this(null)
@@ -41,14 +41,14 @@ class FeatureRowsGetFunc[T <: scala.AnyVal](param: FeatureRowsGetParam[T]) exten
       val buf: ByteBuffer = ByteBuffer.wrap(row.getDataArray)
       val numSet = buf.getInt(0)
       if (numSet == numWorker) {
-        LOG.info(s"Row[${row.getRowId}] Set $numSet")
+        //LOG.info(s"Row[${row.getRowId}] Set $numSet")
         var rowNnz = 0
         val offsets = new Array[Int](numSet)
         var pos = 4
         for (j <- 0 until numWorker) {
           val workerId = buf.getInt(pos)
           val nnzOfOneWorker = buf.getInt(pos + 4)
-          LOG.info(s"Row[${row.getRowId}] Worker[$workerId] has $nnzOfOneWorker nnz")
+          //LOG.info(s"Row[${row.getRowId}] Worker[$workerId] has $nnzOfOneWorker nnz")
           rowNnz += nnzOfOneWorker
           for (k <- 0 until workerId)
             offsets(k) += nnzOfOneWorker
@@ -72,6 +72,13 @@ class FeatureRowsGetFunc[T <: scala.AnyVal](param: FeatureRowsGetParam[T]) exten
               typeTRowBins(offset + k) = buf.get(pos); pos += 1
             }
             featureRows.put(rowId, (rowIndices, typeTRowBins.asInstanceOf[Array[T]]))
+            if (row.getRowId == 5) {
+              var str = "Row[5]: "
+              for (k <- rowIndices.indices) {
+                str += s"${rowIndices(k)}:${typeTRowBins(k)}, "
+              }
+              LOG.info(str)
+            }
           }
           else if (bytesPerBin == 2) {
             //val typeTRowBins = rowBins.asInstanceOf[Array[Short]]
@@ -109,13 +116,16 @@ class FeatureRowsGetFunc[T <: scala.AnyVal](param: FeatureRowsGetParam[T]) exten
 
     val getParam = super.getParam.asInstanceOf[FeatureRowsGetParam[T]]
     val numBin = getParam.getNumBin
-    var minValue: Int = 0
-    if (numBin <= 256)
+    /*var minValue: Int = 0
+    if (numBin <= 256) {
       minValue = Byte.MinValue
-    else if (numBin <= 65536)
+    }
+    else if (numBin <= 65536) {
       minValue = Short.MinValue
-    else
+    }
+    else {
       minValue = Int.MinValue
+    }*/
 
     for (i <- 0 until results.size()) {
       val partFeatRows = results.get(i).getFeatureRows
@@ -127,8 +137,36 @@ class FeatureRowsGetFunc[T <: scala.AnyVal](param: FeatureRowsGetParam[T]) exten
         val (indices, bins) = entry.getValue
         val nnz = indices.length
         val typeIntBins = new Array[Int](nnz)
-        for (j <- 0 until nnz)
+
+        if (numBin <= 256) {
+          val typeTBins = bins.asInstanceOf[Array[Byte]]
+          for (j <- 0 until nnz) {
+            typeIntBins(j) = typeTBins(j).toInt - Byte.MinValue
+          }
+          if (rowId == 5) {
+            var str = "Row[5]"
+            for (j <- indices.indices) {
+              str += s"${indices(j)}:${typeIntBins(j)}, "
+            }
+            LOG.info(str)
+          }
+        }
+        else if (numBin <= 65536) {
+          val typeTBins = bins.asInstanceOf[Array[Short]]
+          for (j <- 0 until nnz) {
+            typeIntBins(j) = typeTBins(j).toInt - Short.MinValue
+          }
+        }
+        else {
+          val typeTBins = bins.asInstanceOf[Array[Int]]
+          for (j <- 0 until nnz) {
+            typeIntBins(j) = typeTBins(j) - Int.MinValue
+          }
+        }
+
+        /*for (j <- 0 until nnz) {
           typeIntBins(j) = bins(j).asInstanceOf[Int] - minValue
+        }*/
 
         featureRows.put(rowId, (indices, typeIntBins))
       }
@@ -138,7 +176,7 @@ class FeatureRowsGetFunc[T <: scala.AnyVal](param: FeatureRowsGetParam[T]) exten
   }
 }
 
-class FeatureRowsGetParam[T <: scala.AnyVal](matrixId: Int, numWorker: Int,
+class FeatureRowsGetParam[@specialized(Byte, Short, Int) T <: scala.AnyVal](matrixId: Int, numWorker: Int,
                           rowIndexes: Array[Int], numBin: Int) extends GetParam(matrixId) {
   def getNumWorker = numWorker
 
@@ -171,7 +209,7 @@ class FeatureRowsGetParam[T <: scala.AnyVal](matrixId: Int, numWorker: Int,
   }
 }
 
-class FeatureRowsPartitionGetParam[T <: scala.AnyVal](matrixId: Int, partKey: PartitionKey, _rowIndexes: util.List[Int],
+class FeatureRowsPartitionGetParam[@specialized(Byte, Short, Int) T <: scala.AnyVal](matrixId: Int, partKey: PartitionKey, _rowIndexes: util.List[Int],
                                                       _numWorker: Int, _numBin: Int) extends PartitionGetParam(matrixId, partKey) {
   var rowIndexes: util.List[Int] = _rowIndexes
   var numWorker: Int = _numWorker

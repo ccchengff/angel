@@ -535,7 +535,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       }
       val start: Int = fid
       val stop: Int = fid + transposeBatchSize
-      LOG.info(s"Range[$start-$stop)")
+      //LOG.info(s"Range[$start-$stop)")
       val sketches = new Array[HeapQuantileSketch](transposeBatchSize)
       val estimateNs = new Array[Long](transposeBatchSize)
       while (fid < stop) {
@@ -553,7 +553,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       sketchModel.update(new QSketchesMergeFunc(new QSketchesMergeParam(
         matrixId, true, rowIndexes, numWorker, numSplit, sketches, estimateNs))).get
       FPGBDTLearner.sync(model)
-      LOG.info("Push sketches finished")
+      //LOG.info("Push sketches finished")
       // 3.2.3. pull quantiles from PS
       var getRowIndexes: Array[Int] = rowIndexes.clone()
       while (getRowIndexes != null) {
@@ -564,7 +564,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
           val quantiles: Array[Float] = getResult.getQuantiles(rowId)
           fid = rowId + start
           if (quantiles == null) {
-            LOG.info(s"Feature[$fid] need to try again")
+            //LOG.info(s"Feature[$fid] need to try again")
             retryList.add(rowId)
           }
           else {
@@ -582,7 +582,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
         }
       }
       FPGBDTLearner.sync(model)
-      LOG.info("Pull sketches finished")
+      //LOG.info("Pull sketches finished")
       // 3.2.3. find bin indexes
       val setFeatureRowParam = new FeatureRowsUpdateParam[Byte](matrixId, true,
           numWorker, ctx.getTaskIndex, transposeBatchSize, numSplit)
@@ -594,13 +594,20 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
         for (i <- 0 until nnz) {
           fIndices(i) = featIndices(fid).get(i) + offset
           fBins(i) = fpDataStore.indexOf(featValues(fid).get(i), fid)
+          if (fid == 5) {
+            var str = s"Feature[5]: "
+            for (i <- fIndices.indices) {
+              str += s"${fIndices(i)}:${fBins(i)}, "
+            }
+            LOG.info(str)
+          }
         }
         setFeatureRowParam.set(rowId, fIndices, fBins)
       }
       // 3.2.4. push to PS
       sketchModel.update(new FeatureRowsUpdateFunc(setFeatureRowParam)).get
       FPGBDTLearner.sync(model)
-      LOG.info("Push feature rows finished")
+      //LOG.info("Push feature rows finished")
       // 3.2.5. pull feature rows from PS
       if (param.featLo < stop && param.featHi > start) {
         val getRowIndexes = (Math.max(param.featLo, start) until Math.min(param.featHi, stop)).toArray
@@ -612,81 +619,19 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
           fid = entry.getKey + start
           val (indices, bins) = entry.getValue
           fpDataStore.setFeatureRow(fid, indices, bins)
+          var str = s"Feature[$fid]: "
+          for (i <- indices.indices) {
+            str += s"${indices(i)}:${bins(i)}, "
+          }
+          LOG.info(str)
         }
       }
       FPGBDTLearner.sync(model)
-      LOG.info("Pull feature rows finished")
-      fid = stop
+      //LOG.info("Pull feature rows finished")
+      assert(fid == stop)
     }
     LOG.info(s"Get feature rows cost ${System.currentTimeMillis() - createStart} ms")
-    if (1 == 1) return fpDataStore
 
-    for (fid <- 0 until numFeature) {
-      if (nnzNumVec.get(fid) > 0) {
-        // 3.2.1. create local quantile sketch
-        val nnz: Int = featIndices(fid).size()
-        val sketch: HeapQuantileSketch = new HeapQuantileSketch(nnz.toLong)
-        for (i <- 0 until nnz) {
-          sketch.update(featValues(fid).get(i))
-        }
-        // 3.2.2. push and merge on PS
-        sketchModel.update(new QSketchMergeFunc(new QSketchMergeParam(
-          matrixId, true, fid, numWorker, numSplit, sketch, nnzNumVec.get(fid))))
-        //FPGBDTLearner.clockAllMatrices(needFlushMatrices, model, false)
-        //FPGBDTLearner.sync(model)
-        //val quantiles = sketchModel.get(new PartialGetRowFunc(
-        //  matrixId, fid, 0, numQuantiles)).asInstanceOf[PartialGetRowResult].getData
-        //LOG.info("Feature[" + fid + "] quantiles: [" + quantiles.mkString(", ") + "]")
-      }
-    }
-    FPGBDTLearner.clockAllMatrices(needFlushMatrices, model, true)
-
-    for (fid <- 0 until numFeature) {
-      if (nnzNumVec.get(fid) > 0) {
-        var quantilesResult = sketchModel.get(new QSketchGetFunc(new QSketchGetParam(
-          matrixId, fid, numWorker, numSplit))).asInstanceOf[QSketchGetResult]
-        while (!quantilesResult.isSuccess) {
-          quantilesResult = sketchModel.get(new QSketchGetFunc(new QSketchGetParam(
-            matrixId, fid, numWorker, numSplit))).asInstanceOf[QSketchGetResult]
-        }
-        val quantiles = quantilesResult.getQuantiles
-        LOG.info("Feature[" + fid + "] quantiles: [" + quantiles.mkString(", ") + "]")
-      }
-    }
-    LOG.info(s"Get quantiles cost ${System.currentTimeMillis() - createStart} ms")
-
-    /*val fracs = new Array[Double](param.numQuantiles)
-    for (i <- 0 until param.numQuantiles) {
-      fracs(i) = i.toDouble / param.numQuantiles.toDouble
-    }
-    for (fid <- 0 until numFeature) {
-      if (ctx.getTaskIndex == 0) {
-        // 3.2.1. create local quantile sketch
-        val nnz: Int = featIndices(fid).size()
-        val sketch = DoublesSketch.builder().build()
-        //val sketch = new HeapQuantileSketch(nnz.toLong)
-        for (i <- 0 until nnz) {
-          sketch.update(featValues(fid).get(i))
-        }
-        // 3.2.2. push and merge on PS
-        // blablabla
-        val quantiles = Maths.double2Float(sketch.getQuantiles(fracs))
-        val candidatesVec = new DenseFloatVector(param.numQuantiles, quantiles)
-        candidatesModel.increment(fid, candidatesVec)
-      }
-      // 3.2.3. pull candidate splits from PS sketch model
-      FPGBDTLearner.clockAllMatrices(needFlushMatrices, model, true)
-      val quantiles = candidatesModel.getRow(fid).asInstanceOf[DenseFloatVector]
-      if (fid >= param.featLo && fid < param.featHi) {
-        fpDataStore.setSplits(fid, quantiles.getValues)
-      }
-      LOG.info(s"Candidate splits of feature[$fid]: [" + quantiles.getValues.mkString(", ") + "]")
-      // 3.2.4. push candidate splits to PS candidate model
-      // blablabla
-    }
-    // 3.2. push each feature row and pull global feature row
-    // blablabla
-    */
     // 3.3. set info for each instance
     var labelsVec = new DenseFloatVector(numTotalSample)
     for (i <- 0 until numLocalSample) {
@@ -724,10 +669,10 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     * @return : a learned model
     */
   override def train(train: DataBlock[LabeledData], vali: DataBlock[LabeledData]): MLModel = {
-    transpose(train, model)
+    val trainDataStore: TrainDataStore = transpose(train, model)
     if (1 == 1) return model
 
-    val trainDataStore: TrainDataStore = initFeatureMetaInfo(train, model)
+    //val trainDataStore: TrainDataStore = initFeatureMetaInfo(train, model)
     train.clean()
     val validDataStore: TestDataStore = initDataMetaInfo(vali, model)
     vali.clean()
@@ -742,11 +687,11 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     globalMetrics.addMetric(MLConf.VALID_ERROR, ErrorMetric(1))
 
     while (controller.phase != FPGBDTPhase.FINISHED) {
-      if (controller.phase == FPGBDTPhase.CREATE_SKETCH) {
+      /*if (controller.phase == FPGBDTPhase.CREATE_SKETCH) {
         LOG.info(s"******Current phase: CREATE_SKETCH, clock[$clock]******")
         controller.createSketch()
       }
-      else if (controller.phase == FPGBDTPhase.NEW_TREE) {
+      else */if (controller.phase == FPGBDTPhase.NEW_TREE) {
         LOG.info(s"******Current phase: NEW_TREE, clock[$clock]******")
         controller.createNewTree()
       }

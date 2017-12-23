@@ -15,7 +15,7 @@ import org.apache.commons.logging.{Log, LogFactory}
 /**
   * Created by ccchengff on 2017/12/16.
   */
-class FeatureRowsUpdateFunc[T <: scala.AnyVal](param: FeatureRowsUpdateParam[T]) extends UpdateFunc(param) {
+class FeatureRowsUpdateFunc[@specialized(Byte, Short, Int) T <: scala.AnyVal](param: FeatureRowsUpdateParam[T]) extends UpdateFunc(param) {
   val LOG: Log = LogFactory.getLog(classOf[FeatureRowsUpdateFunc[T]])
 
   def this() = this(null)
@@ -53,7 +53,7 @@ class FeatureRowsUpdateFunc[T <: scala.AnyVal](param: FeatureRowsUpdateParam[T])
     try {
       row.getLock.writeLock().lock()
       val buf: ByteBuffer = ByteBuffer.wrap(row.getDataArray)
-      var numSet: Int = buf.get(0)
+      var numSet: Int = buf.getInt(0)
       if (numSet == param.numWorker) numSet = 0
       //LOG.info(s"Row[${row.getRowId}] Before[$numSet]")
 
@@ -62,9 +62,9 @@ class FeatureRowsUpdateFunc[T <: scala.AnyVal](param: FeatureRowsUpdateParam[T])
         else if (param.numBin <= 65536) 2 else 4
       var skip = numSet
       while (skip > 0) {
-        val workerId = buf.getInt(pos)
+        //val workerId = buf.getInt(pos)
         val nnzOfOneWorker = buf.getInt(pos + 4)
-        LOG.info(s"Row[${row.getRowId}] $numSet-th update: Worker[$workerId] has $nnzOfOneWorker nnz")
+        //LOG.info(s"Row[${row.getRowId}] $numSet-th update: Worker[$workerId] has $nnzOfOneWorker nnz")
         pos += 8 + (4 + bytesPerBin) * nnzOfOneWorker
         skip -= 1
       }
@@ -78,6 +78,13 @@ class FeatureRowsUpdateFunc[T <: scala.AnyVal](param: FeatureRowsUpdateParam[T])
         val typeTBins = bins.asInstanceOf[Array[Byte]]
         for (bin <- typeTBins) {
           buf.put(pos, bin); pos += 1
+        }
+        if (row.getRowId == 5) {
+          var str = "Row[5]: "
+          for (i <- indices.indices) {
+            str += s"${indices(i)}:${typeTBins(i)}, "
+          }
+          LOG.info(str)
         }
       }
       else if (bytesPerBin == 2) {
@@ -100,7 +107,7 @@ class FeatureRowsUpdateFunc[T <: scala.AnyVal](param: FeatureRowsUpdateParam[T])
   }
 }
 
-class FeatureRowsUpdateParam[T <: scala.AnyVal](matrixId: Int, updateClock: Boolean,
+class FeatureRowsUpdateParam[@specialized(Byte, Short, Int) T <: scala.AnyVal](matrixId: Int, updateClock: Boolean,
                                                 numWorker: Int, workerId: Int,
                                                 nrows: Int, numBin: Int) extends UpdateParam(matrixId, updateClock) {
   val LOG: Log = LogFactory.getLog(classOf[FeatureRowsUpdateParam[T]])
@@ -118,6 +125,13 @@ class FeatureRowsUpdateParam[T <: scala.AnyVal](matrixId: Int, updateClock: Bool
       for (i <- bins.indices)
         typeTBins(i) = (bins(i) + Byte.MinValue).toByte
       rowBins.add(typeTBins.asInstanceOf[Array[T]])
+      if (rowId == 5) {
+        var str = "Row[5]: "
+        for (j <- indices.indices) {
+          str += s"${indices(j)}:${typeTBins(j)}, "
+        }
+        LOG.info(str)
+      }
     }
     else if (numBin <= 65536) {
       val typeTBins = new Array[Short](bins.length)
@@ -157,7 +171,6 @@ class FeatureRowsUpdateParam[T <: scala.AnyVal](matrixId: Int, updateClock: Bool
       .getMatrixPartitionRouter.getPartitionKeyList(getMatrixId)
     val size: Int = partList.size
 
-    LOG.info(s"In split, ${rowIndexes.size()} rows in total")
     val partParamList: util.List[PartitionUpdateParam] =
       new util.ArrayList[PartitionUpdateParam](size)
     for (i <- 0 until partList.size()) {
@@ -174,7 +187,7 @@ class FeatureRowsUpdateParam[T <: scala.AnyVal](matrixId: Int, updateClock: Bool
       }
 
       if (featureRows.size() > 0) {
-        LOG.info(s"Part[$i] has ${featureRows.size()} rows")
+        //LOG.info(s"Part[$i] has ${featureRows.size()} rows")
         partParamList.add(new FeatureRowsPartitionUpdateParam[T](super.getMatrixId,
           partKey, super.isUpdateClock, featureRows, numWorker, workerId, numBin))
       }
@@ -183,7 +196,7 @@ class FeatureRowsUpdateParam[T <: scala.AnyVal](matrixId: Int, updateClock: Bool
   }
 }
 
-class FeatureRowsPartitionUpdateParam[T <: scala.AnyVal](matrixId: Int, partKey: PartitionKey, updateClock: Boolean,
+class FeatureRowsPartitionUpdateParam[@specialized(Byte, Short, Int) T <: scala.AnyVal](matrixId: Int, partKey: PartitionKey, updateClock: Boolean,
                                                 _featureRows: util.Map[Int, (Array[Int], Array[T])],
                                                 _numWorker: Int, _workerId: Int, _numBin: Int) extends PartitionUpdateParam(matrixId, partKey, updateClock) {
   var featureRows: util.Map[Int, (Array[Int], Array[T])] = _featureRows

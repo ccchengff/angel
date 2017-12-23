@@ -12,7 +12,7 @@ class FeatureRowsGetResult(featureRows: util.Map[Int, (Array[Int], Array[Int])])
   def getFeatureRows = featureRows
 }
 
-class FeatureRowsPartitionGetResult[T <: scala.AnyVal](_featureRows: util.Map[Int, (Array[Int], Array[T])],
+class FeatureRowsPartitionGetResult[@specialized(Byte, Short, Int) T <: scala.AnyVal](_featureRows: util.Map[Int, (Array[Int], Array[T])],
                                                        _numBin: Int) extends PartitionGetResult {
   var featureRows: util.Map[Int, (Array[Int], Array[T])] = _featureRows
   var numBin: Int = _numBin

@@ -199,11 +199,7 @@ public class QSketchesMergeFunc extends UpdateFunc {
       ByteBuffer buf = ByteBuffer.wrap(data);
       buf.mark();
       int numMerged = buf.getInt();
-      LOG.info(String.format("Row[%d] numMerged[%d]", row.getRowId(), numMerged));
-      if (numMerged == partParam.numWorker) {
-
-        numMerged = 0;
-      }
+      if (numMerged == partParam.numWorker) numMerged = 0;
       if (numMerged == 0)
         qs1 = new HeapQuantileSketch(qs2.getK(), partParam.estimateNs[index]);
       else
