@@ -1,6 +1,5 @@
 package com.tencent.angel.ml.FPGBDT
 
-import java.nio.ByteBuffer
 import java.util
 
 import com.tencent.angel.conf.AngelConf
@@ -9,24 +8,18 @@ import com.tencent.angel.ml.FPGBDT.algo.FPRegTreeDataStore.{TestDataStore, Train
 import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch
 import com.tencent.angel.ml.FPGBDT.psf._
 import com.tencent.angel.ml.FPGBDT.psf.ClearUpdate.ClearUpdateParam
-import com.tencent.angel.ml.FPGBDT.psf.QSketchGetFunc.QSketchGetParam
-import com.tencent.angel.ml.FPGBDT.psf.QSketchMergeFunc.QSketchMergeParam
 import com.tencent.angel.ml.FPGBDT.psf.QSketchesMergeFunc.QSketchesMergeParam
 import com.tencent.angel.ml.MLLearner
 import com.tencent.angel.ml.conf.MLConf
 import com.tencent.angel.ml.feature.LabeledData
 import com.tencent.angel.ml.math.vector._
-import com.tencent.angel.ml.matrix.MatrixContext
 import com.tencent.angel.ml.matrix.psf.update.enhance.VoidResult
 import com.tencent.angel.ml.metric.ErrorMetric
 import com.tencent.angel.ml.model.MLModel
 import com.tencent.angel.ml.param.FPGBDTParam
-import com.tencent.angel.ml.utils.Maths
 import com.tencent.angel.worker.storage.DataBlock
 import com.tencent.angel.worker.task.TaskContext
-import com.yahoo.sketches.quantiles.DoublesSketch
 import org.apache.commons.logging.LogFactory
-import com.tencent.angel.protobuf.generated.MLProtos.RowType
 
 
 /**
@@ -39,7 +32,7 @@ object FPGBDTLearner {
     val syncModel = model.getPSModel(FPGBDTModel.SYNC)
     syncModel.clock().get
     syncModel.getRow(0)
-    LOG.info("SYNCHRONIZATION")
+    LOG.debug("******SYNCHRONIZATION******")
   }
 
   def clearAllMatrices(needClearMatrices: util.Set[String], model: MLModel): Unit = {
@@ -451,7 +444,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     val numFeature: Int = param.numFeature
     val numWorker: Int = param.numWorker
     val numSplit: Int = param.numSplit
-    LOG.info(s"Transpose dataset, numFeature=$numFeature, numWorker=$numWorker")
+    LOG.info(s"Transpose dataset and create data meta, numFeature=$numFeature, numWorker=$numWorker")
 
     val featIndices = new Array[util.ArrayList[Int]](numFeature)
     val featValues = new Array[util.ArrayList[Float]](numFeature)
@@ -513,17 +506,17 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     LOG.info(s"Sum up sample number cost ${System.currentTimeMillis() - sumUpStart} ms, "
       + s"total sample number=$numTotalSample, Task[${ctx.getTaskIndex}] first instance index=$offset")
 
-    // 3. push features & create feature data storage
+    // 3. transpose dataset & create feature data storage
     val createStart = System.currentTimeMillis()
     // 3.1. create data storage
     val fpDataStore = new TrainDataStore(param, numTotalSample)
     // 3.2. get candidate splits
-    val sketchModel = model.getPSModel(FPGBDTModel.SKETCH_MAT)
+    val sketchModel = model.getPSModel(FPGBDTModel.FEAT_ROW_MAT)
     val matrixId = sketchModel.getMatrixId()
     needFlushMatrices.clear()
-    needFlushMatrices.add(FPGBDTModel.SKETCH_MAT)
+    needFlushMatrices.add(FPGBDTModel.FEAT_ROW_MAT)
 
-    var transposeBatchSize: Int = 1000
+    var transposeBatchSize: Int = 1024
     if (transposeBatchSize == -1 || transposeBatchSize > numFeature)
       transposeBatchSize = numFeature
     var fid: Int = 0
@@ -535,7 +528,6 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       }
       val start: Int = fid
       val stop: Int = fid + transposeBatchSize
-      //LOG.info(s"Range[$start-$stop)")
       val sketches = new Array[HeapQuantileSketch](transposeBatchSize)
       val estimateNs = new Array[Long](transposeBatchSize)
       while (fid < stop) {
@@ -553,7 +545,6 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       sketchModel.update(new QSketchesMergeFunc(new QSketchesMergeParam(
         matrixId, true, rowIndexes, numWorker, numSplit, sketches, estimateNs))).get
       FPGBDTLearner.sync(model)
-      //LOG.info("Push sketches finished")
       // 3.2.3. pull quantiles from PS
       var getRowIndexes: Array[Int] = rowIndexes.clone()
       while (getRowIndexes != null) {
@@ -582,7 +573,6 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
         }
       }
       FPGBDTLearner.sync(model)
-      //LOG.info("Pull sketches finished")
       // 3.2.3. find bin indexes
       val setFeatureRowParam = new FeatureRowsUpdateParam[Byte](matrixId, true,
           numWorker, ctx.getTaskIndex, transposeBatchSize, numSplit)
@@ -594,23 +584,18 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
         for (i <- 0 until nnz) {
           fIndices(i) = featIndices(fid).get(i) + offset
           fBins(i) = fpDataStore.indexOf(featValues(fid).get(i), fid)
-          if (fid == 5) {
-            var str = s"Feature[5]: "
-            for (i <- fIndices.indices) {
-              str += s"${fIndices(i)}:${fBins(i)}, "
-            }
-            LOG.info(str)
-          }
         }
         setFeatureRowParam.set(rowId, fIndices, fBins)
       }
       // 3.2.4. push to PS
       sketchModel.update(new FeatureRowsUpdateFunc(setFeatureRowParam)).get
       FPGBDTLearner.sync(model)
-      //LOG.info("Push feature rows finished")
       // 3.2.5. pull feature rows from PS
       if (param.featLo < stop && param.featHi > start) {
-        val getRowIndexes = (Math.max(param.featLo, start) until Math.min(param.featHi, stop)).toArray
+        val from = Math.max(param.featLo, start) - start
+        val to = Math.min(param.featHi, stop) - start
+        getRowIndexes = (from until to).toArray
+        LOG.debug(s"Get row range: [$from, $to), feature range: [${from + start}, ${to + start})")
         val featureRows = sketchModel.get(new FeatureRowsGetFunc[Byte](matrixId, numWorker,
           getRowIndexes, numSplit)).asInstanceOf[FeatureRowsGetResult].getFeatureRows
         val iter = featureRows.entrySet().iterator()
@@ -619,18 +604,14 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
           fid = entry.getKey + start
           val (indices, bins) = entry.getValue
           fpDataStore.setFeatureRow(fid, indices, bins)
-          var str = s"Feature[$fid]: "
-          for (i <- indices.indices) {
-            str += s"${indices(i)}:${bins(i)}, "
-          }
-          LOG.info(str)
         }
       }
       FPGBDTLearner.sync(model)
-      //LOG.info("Pull feature rows finished")
-      assert(fid == stop)
+      // 3.2.6. continue to next round
+      fid = stop
+      //LOG.info(s"Transpose: features [$start-$stop) done")
     }
-    LOG.info(s"Get feature rows cost ${System.currentTimeMillis() - createStart} ms")
+    LOG.info(s"Transpose dataset cost ${System.currentTimeMillis() - createStart} ms")
 
     // 3.3. set info for each instance
     var labelsVec = new DenseFloatVector(numTotalSample)
@@ -657,7 +638,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     fpDataStore.setPreds(preds)
     fpDataStore.setWeights(weights)
 
-    LOG.info(s"Create data meta info cost ${System.currentTimeMillis() - start} ms")
+    LOG.info(s"Transpose dataset and create data meta info cost ${System.currentTimeMillis() - start} ms")
     fpDataStore
   }
 
@@ -670,9 +651,6 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     */
   override def train(train: DataBlock[LabeledData], vali: DataBlock[LabeledData]): MLModel = {
     val trainDataStore: TrainDataStore = transpose(train, model)
-    if (1 == 1) return model
-
-    //val trainDataStore: TrainDataStore = initFeatureMetaInfo(train, model)
     train.clean()
     val validDataStore: TestDataStore = initDataMetaInfo(vali, model)
     vali.clean()

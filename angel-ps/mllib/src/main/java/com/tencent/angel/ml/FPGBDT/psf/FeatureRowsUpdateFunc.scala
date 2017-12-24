@@ -79,13 +79,6 @@ class FeatureRowsUpdateFunc[@specialized(Byte, Short, Int) T <: scala.AnyVal](pa
         for (bin <- typeTBins) {
           buf.put(pos, bin); pos += 1
         }
-        if (row.getRowId == 5) {
-          var str = "Row[5]: "
-          for (i <- indices.indices) {
-            str += s"${indices(i)}:${typeTBins(i)}, "
-          }
-          LOG.info(str)
-        }
       }
       else if (bytesPerBin == 2) {
         val typeTBins = bins.asInstanceOf[Array[Short]]
@@ -125,13 +118,6 @@ class FeatureRowsUpdateParam[@specialized(Byte, Short, Int) T <: scala.AnyVal](m
       for (i <- bins.indices)
         typeTBins(i) = (bins(i) + Byte.MinValue).toByte
       rowBins.add(typeTBins.asInstanceOf[Array[T]])
-      if (rowId == 5) {
-        var str = "Row[5]: "
-        for (j <- indices.indices) {
-          str += s"${indices(j)}:${typeTBins(j)}, "
-        }
-        LOG.info(str)
-      }
     }
     else if (numBin <= 65536) {
       val typeTBins = new Array[Short](bins.length)

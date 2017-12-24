@@ -11,5 +11,5 @@ object FPGBDTPhase {
   val AFTER_SPLIT: Int = 4
   val FINISH_TREE: Int = 5
   val FINISHED: Int = 6
-  val CREATE_SKETCH: Int = 7 // should abandon
+  //val CREATE_SKETCH: Int = 7 // should abandon
 }

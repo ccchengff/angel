@@ -282,8 +282,9 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       // 3.1. get info of current feature
       val fid: Int = sampleFeats(i)
       //val indices: Array[Int] = trainDataStore.getFeatRow(fid).getIndices
-      val indices: Array[Int] = trainDataStore.getFeatIndices(fid)
-      val bins: Array[Int] = trainDataStore.getFeatBins(fid)
+      //val indices: Array[Int] = trainDataStore.getFeatIndices(fid)
+      //val bins: Array[Int] = trainDataStore.getFeatBins(fid)
+      val (indices, bins) = trainDataStore.getFeatureRow(fid)
       val nnz: Int = indices.length
       val gradOffset: Int = i * numSplit * 2
       val hessOffset: Int = gradOffset + numSplit
@@ -678,8 +679,9 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       var rightCount: Int = 0
       //val indices: Array[Int] = trainDataStore.getFeatRow(splitFid).getIndices
       //val values: Array[Double] = trainDataStore.getFeatRow(splitFid).getValues
-      val indices: Array[Int] = trainDataStore.getFeatIndices(splitFid)
-      val bins: Array[Int] = trainDataStore.getFeatBins(splitFid)
+      //val indices: Array[Int] = trainDataStore.getFeatIndices(splitFid)
+      //val bins: Array[Int] = trainDataStore.getFeatBins(splitFid)
+      val (indices, bins) = trainDataStore.getFeatureRow(splitFid)
       val nnz: Int = indices.length
       // find out instances that should be in right child
       /*if (splitFvalue < 0.0) {

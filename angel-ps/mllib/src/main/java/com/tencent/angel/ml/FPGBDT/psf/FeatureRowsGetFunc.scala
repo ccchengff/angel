@@ -50,13 +50,13 @@ class FeatureRowsGetFunc[@specialized(Byte, Short, Int) T <: scala.AnyVal](param
           val nnzOfOneWorker = buf.getInt(pos + 4)
           //LOG.info(s"Row[${row.getRowId}] Worker[$workerId] has $nnzOfOneWorker nnz")
           rowNnz += nnzOfOneWorker
-          for (k <- 0 until workerId)
+          for (k <- (workerId + 1) until numWorker)
             offsets(k) += nnzOfOneWorker
           pos += 8 + (4 + bytesPerBin) * nnzOfOneWorker
         }
 
         val rowIndices = new Array[Int](rowNnz)
-        //val rowBins = new Array[T](rowNnz)
+        var rowBins: Array[T] = null
         pos = 4
         for (j <- 0 until numWorker) {
           val workerId = buf.getInt(pos); pos += 4
@@ -66,38 +66,31 @@ class FeatureRowsGetFunc[@specialized(Byte, Short, Int) T <: scala.AnyVal](param
             rowIndices(offset + k) = buf.getInt(pos); pos += 4
           }
           if (bytesPerBin == 1) {
-            //val typeTRowBins = rowBins.asInstanceOf[Array[Byte]]
-            val typeTRowBins = new Array[Byte](rowNnz)
+            if (rowBins == null)
+              rowBins = new Array[Byte](rowNnz).asInstanceOf[Array[T]]
+            val typeTRowBins = rowBins.asInstanceOf[Array[Byte]]
             for (k <- 0 until nnzOfOneWorker) {
               typeTRowBins(offset + k) = buf.get(pos); pos += 1
             }
-            featureRows.put(rowId, (rowIndices, typeTRowBins.asInstanceOf[Array[T]]))
-            if (row.getRowId == 5) {
-              var str = "Row[5]: "
-              for (k <- rowIndices.indices) {
-                str += s"${rowIndices(k)}:${typeTRowBins(k)}, "
-              }
-              LOG.info(str)
-            }
           }
           else if (bytesPerBin == 2) {
-            //val typeTRowBins = rowBins.asInstanceOf[Array[Short]]
-            val typeTRowBins = new Array[Short](rowNnz)
+            if (rowBins == null)
+              rowBins = new Array[Short](rowNnz).asInstanceOf[Array[T]]
+            val typeTRowBins = rowBins.asInstanceOf[Array[Short]]
             for (k <- 0 until nnzOfOneWorker) {
               typeTRowBins(offset + k) = buf.getShort(pos); pos += 2
             }
-            featureRows.put(rowId, (rowIndices, typeTRowBins.asInstanceOf[Array[T]]))
           }
           else {
-            //val typeTRowBins = rowBins.asInstanceOf[Array[Int]]
-            val typeTRowBins = new Array[Int](rowNnz)
+            if (rowBins == null)
+              rowBins = new Array[Int](rowNnz).asInstanceOf[Array[T]]
+            val typeTRowBins = rowBins.asInstanceOf[Array[Int]]
             for (k <- 0 until nnzOfOneWorker) {
               typeTRowBins(offset + k) = buf.getInt(pos); pos += 4
             }
-            featureRows.put(rowId, (rowIndices, typeTRowBins.asInstanceOf[Array[T]]))
           }
         }
-        //featureRows.put(rowId, (rowIndices, rowBins))
+        featureRows.put(rowId, (rowIndices, rowBins))
       }
     }
     new FeatureRowsPartitionGetResult[T](featureRows, numBin)
@@ -116,16 +109,6 @@ class FeatureRowsGetFunc[@specialized(Byte, Short, Int) T <: scala.AnyVal](param
 
     val getParam = super.getParam.asInstanceOf[FeatureRowsGetParam[T]]
     val numBin = getParam.getNumBin
-    /*var minValue: Int = 0
-    if (numBin <= 256) {
-      minValue = Byte.MinValue
-    }
-    else if (numBin <= 65536) {
-      minValue = Short.MinValue
-    }
-    else {
-      minValue = Int.MinValue
-    }*/
 
     for (i <- 0 until results.size()) {
       val partFeatRows = results.get(i).getFeatureRows
@@ -143,13 +126,6 @@ class FeatureRowsGetFunc[@specialized(Byte, Short, Int) T <: scala.AnyVal](param
           for (j <- 0 until nnz) {
             typeIntBins(j) = typeTBins(j).toInt - Byte.MinValue
           }
-          if (rowId == 5) {
-            var str = "Row[5]"
-            for (j <- indices.indices) {
-              str += s"${indices(j)}:${typeIntBins(j)}, "
-            }
-            LOG.info(str)
-          }
         }
         else if (numBin <= 65536) {
           val typeTBins = bins.asInstanceOf[Array[Short]]
@@ -163,11 +139,6 @@ class FeatureRowsGetFunc[@specialized(Byte, Short, Int) T <: scala.AnyVal](param
             typeIntBins(j) = typeTBins(j) - Int.MinValue
           }
         }
-
-        /*for (j <- 0 until nnz) {
-          typeIntBins(j) = bins(j).asInstanceOf[Int] - minValue
-        }*/
-
         featureRows.put(rowId, (indices, typeIntBins))
       }
     }

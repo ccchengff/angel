@@ -33,8 +33,9 @@ class HistogramBuilder(controller: FPGBDTController,
     for (i <- fStart until fEnd) {
       // 2.1. get info of current feature
       val fid: Int = sampleFeats(i)
-      val indices: Array[Int] = trainDataStore.getFeatIndices(fid)
-      val bins: Array[Int] = trainDataStore.getFeatBins(fid)
+      //val indices: Array[Int] = trainDataStore.getFeatIndices(fid)
+      //val bins: Array[Int] = trainDataStore.getFeatBins(fid)
+      val (indices, bins) = trainDataStore.getFeatureRow(fid)
       val nnz: Int = indices.length
       val gradOffset: Int = i * param.numSplit * 2
       val hessOffset: Int = gradOffset + param.numSplit

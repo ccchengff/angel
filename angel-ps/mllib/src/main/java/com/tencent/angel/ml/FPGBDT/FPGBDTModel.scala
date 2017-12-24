@@ -21,7 +21,7 @@ import org.apache.hadoop.conf.Configuration
 object FPGBDTModel {
   val SYNC: String = "fgbdt.sync"
   val NNZ_NUM_MAT: String = "fpgbdt.nnz.num"
-  val SKETCH_MAT: String = "fpgbdt.quantile.sketch"
+  val FEAT_ROW_MAT: String = "fpgbdt.feature.rows"
   val TOTAL_SAMPLE_NUM: String = "fpgbdt.total.sample.num"
   val FEAT_NNZ_MAT: String = "fpgbdt.feature.nnz"
   val LABEL_MAT: String = "fpgbdt.label"
@@ -91,26 +91,26 @@ class FPGBDTModel(conf: Configuration, _ctx: TaskContext = null) extends MLModel
     .setNeedSave(false)
   addPSModel(NNZ_NUM_MAT, nonzeroNumVec)
 
-  // Matrix xxx: quantile sketch
-  var transposeBatchSize: Int = 1000
+  // Matrix xxx: feature rows
+  var transposeBatchSize: Int = 1024
   if (transposeBatchSize == -1 || transposeBatchSize > featNum)
     transposeBatchSize = featNum
-  val bufCapacity = SketchUtils.needBufferCapacity(HeapQuantileSketch.DEFAULT_K, trainDataNum.toLong)
-  val featureRowBufSize = 8 * trainDataNum
+  val bufCapacity = 1 + SketchUtils.needBufferCapacity(HeapQuantileSketch.DEFAULT_K, trainDataNum.toLong)
+  val featureRowBufSize = 1 + 2 * wokergroupNumber + Math.ceil(trainDataNum * 5 / 4).toInt
   val tmp = Math.max(bufCapacity, featureRowBufSize)
-  val sketch = PSModel(SKETCH_MAT, transposeBatchSize, tmp, transposeBatchSize / psNumber, tmp)
+  val sketch = PSModel(FEAT_ROW_MAT, transposeBatchSize, tmp, transposeBatchSize / psNumber, tmp)
     .setRowType(RowType.T_FLOAT_DENSE)
     .setOplogType("DENSE_FLOAT")
     .setNeedSave(false)
-  addPSModel(SKETCH_MAT, sketch)
+  addPSModel(FEAT_ROW_MAT, sketch)
 
   // Matrix 0-1: feature to instance
-  val featRow = PSModel(FEAT_NNZ_MAT, 1, trainDataNum, 1, trainDataNum / psNumber)
+  /*val featRow = PSModel(FEAT_NNZ_MAT, 1, trainDataNum, 1, trainDataNum / psNumber)
     .setRowType(RowType.T_DOUBLE_SPARSE)
     .setOplogType("SPARSE_DOUBLE")
     .setHogwild(true)
     .setNeedSave(false)
-  addPSModel(FEAT_NNZ_MAT, featRow)
+  addPSModel(FEAT_NNZ_MAT, featRow)*/
 
   // Matrix 0-2: labels
   val labels = PSModel(LABEL_MAT, 1, trainDataNum, 1, trainDataNum / psNumber)

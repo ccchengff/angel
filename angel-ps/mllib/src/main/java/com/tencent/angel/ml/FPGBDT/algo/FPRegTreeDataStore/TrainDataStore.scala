@@ -141,6 +141,10 @@ class TrainDataStore(param: FPGBDTParam, _numInstance: Int) {
     featBins(fid - param.featLo) = bins
   }*/
 
+  def getFeatureRow(fid: Int): (Array[Int], Array[Int]) = {
+    (featIndices(fid - param.featLo), featBins(fid - param.featLo))
+  }
+
   def setFeatureRow(fid: Int, indices: Array[Int], bins: Array[Int]): Unit = {
     featIndices(fid - param.featLo) = indices
     featBins(fid - param.featLo) = bins
