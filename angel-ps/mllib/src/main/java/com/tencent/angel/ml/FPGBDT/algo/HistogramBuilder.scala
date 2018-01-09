@@ -2,7 +2,7 @@ package com.tencent.angel.ml.FPGBDT.algo
 
 import java.util
 
-import com.tencent.angel.ml.FPGBDT.algo.FPRegTreeDataStore.TrainDataStore
+import com.tencent.angel.ml.FPGBDT.algo.storage.TrainDataStore
 import com.tencent.angel.ml.GBDT.algo.RegTree.{GradPair, RegTNodeStat}
 import com.tencent.angel.ml.math.vector.DenseFloatVector
 import com.tencent.angel.ml.param.FPGBDTParam
@@ -19,7 +19,7 @@ class HistogramBuilder(controller: FPGBDTController,
   override def run(): Unit = {
     val sampleFeats: Array[Int] = controller.fset.get(controller.currentTree)
     val insToNode: Array[Int] = controller.insToNode
-    val gradPairs: Array[GradPair] = controller.gradPairs
+    val gradPairs: util.List[GradPair] = controller.gradPairs
     val histograms: util.Map[Int, DenseFloatVector] = controller.histograms.get(controller.currentTree)
     val nodeStats: util.List[RegTNodeStat] = controller.forest(controller.currentTree).stats
     // 1. get responsible feature range
@@ -51,7 +51,7 @@ class HistogramBuilder(controller: FPGBDTController,
           val binIdx: Int = bins(j)
           val gradIdx: Int = gradOffset + binIdx
           val hessIdx: Int = hessOffset + binIdx
-          val gradPair: GradPair = gradPairs(insIdx)
+          val gradPair: GradPair = gradPairs.get(insIdx)
           hist.set(gradIdx, hist.get(gradIdx) + gradPair.getGrad)
           hist.set(hessIdx, hist.get(hessIdx) + gradPair.getHess)
           gradTaken += gradPair.getGrad

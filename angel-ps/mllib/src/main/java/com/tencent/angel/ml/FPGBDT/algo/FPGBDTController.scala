@@ -1,11 +1,10 @@
 package com.tencent.angel.ml.FPGBDT.algo
 
 import java.util
-import java.util.Collections
 import java.util.concurrent.{ExecutorService, Executors}
 
 import com.tencent.angel.ml.FPGBDT.{FPGBDTLearner, FPGBDTModel}
-import com.tencent.angel.ml.FPGBDT.algo.FPRegTreeDataStore.{TestDataStore, TrainDataStore}
+import com.tencent.angel.ml.FPGBDT.algo.storage.{TestDataStore, TrainDataStore}
 import com.tencent.angel.ml.FPGBDT.psf.{RangeBitSetGetRowFunc, RangeBitSetGetRowResult, RangeBitSetUpdateFunc}
 import com.tencent.angel.ml.FPGBDT.psf.RangeBitSetUpdateFunc.BitsUpdateParam
 import com.tencent.angel.ml.GBDT.algo.RegTree.{GradPair, GradStats, RegTNodeStat, RegTree}
@@ -13,7 +12,7 @@ import com.tencent.angel.ml.GBDT.algo.tree.{SplitEntry, TNode}
 import com.tencent.angel.ml.conf.MLConf
 import com.tencent.angel.ml.math.vector._
 import com.tencent.angel.ml.metric.{GlobalMetrics, LogErrorMetric}
-import com.tencent.angel.ml.objective.Loss
+import com.tencent.angel.ml.objective.{Loss, ObjFunc, RegLossObj}
 import com.tencent.angel.ml.param.FPGBDTParam
 import com.tencent.angel.ml.utils.Maths
 import com.tencent.angel.worker.task.TaskContext
@@ -33,15 +32,15 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   val maxNodeNum: Int = Maths.pow(2, param.maxDepth) - 1
   var phase: Int = FPGBDTPhase.NEW_TREE
 
-  //val objFunc: ObjFunc = new RegLossObj(new Loss.BinaryLogisticLoss)
-  //var gradPairs: util.List[GradPair] = new util.ArrayList[GradPair]()
-  val objective = new Loss.BinaryLogisticLoss
+  val objFunc: ObjFunc = new RegLossObj(new Loss.BinaryLogisticLoss)
+  var gradPairs: util.List[GradPair] = _
+  /*val objective = new Loss.BinaryLogisticLoss
   val gradPairs: Array[GradPair] = new Array[GradPair](trainDataStore.numInstance)
   for (label <- trainDataStore.labels) {
     if (!objective.checkLabel(label)) {
       LOG.error(objective.labelErrorMsg())
     }
-  }
+  }*/
 
   var fset: util.List[Array[Int]] = _   // save all sampled feature sets for incremental training
   val activeNode: Array[Int] = new Array[Int](maxNodeNum) // active tree node, 0:inactive, 1:active, 2:ready
@@ -100,7 +99,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
   // calculate gradients of all instances, push root node stats to PS
   def calGradPairs(): Unit = {
     LOG.info(s"------Calculate grad pairs------")
-    var gradSum: Float = 0.0f
+    /*var gradSum: Float = 0.0f
     var hessSum: Float = 0.0f
     for (insIdx <- 0 until trainDataStore.numInstance) {
       val pred: Float = trainDataStore.getPred(insIdx)
@@ -112,6 +111,13 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       gradPairs(insIdx) = new GradPair(grad, hess)
       gradSum += grad
       hessSum += hess
+    }*/
+    gradPairs = objFunc.calGrad(trainDataStore.getPreds, trainDataStore, 0)
+    var gradSum: Float = 0.0f
+    var hessSum: Float = 0.0f
+    for (i <- 0 until gradPairs.size()) {
+      gradSum += gradPairs.get(i).getGrad
+      hessSum += gradPairs.get(i).getHess
     }
     val rootStats: GradStats = new GradStats(gradSum, hessSum)
     this.forest(this.currentTree).stats.get(0).setStats(rootStats)
@@ -297,7 +303,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
           val binIdx: Int = bins(j)
           val gradIdx: Int = gradOffset + binIdx
           val hessIdx: Int = hessOffset + binIdx
-          val gradPair: GradPair = gradPairs(insIdx)
+          val gradPair: GradPair = gradPairs.get(insIdx)
           histogram.set(gradIdx, histogram.get(gradIdx) + gradPair.getGrad)
           histogram.set(hessIdx, histogram.get(hessIdx) + gradPair.getHess)
           gradTaken += gradPair.getGrad
@@ -789,16 +795,16 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
             if (insValue >= splitFvalue) {
               bitset.set(j)
               rightCount += 1
-              rightChildSumGrad += this.gradPairs(insIdx).getGrad
-              rightChildSumHess += this.gradPairs(insIdx).getHess
+              rightChildSumGrad += this.gradPairs.get(insIdx).getGrad
+              rightChildSumHess += this.gradPairs.get(insIdx).getHess
             }
             searchFrom = index + 1
           }
           else if (splitFvalue < 0.0f) { // default to right child
             bitset.set(j)
             rightCount += 1
-            rightChildSumGrad += this.gradPairs(insIdx).getGrad
-            rightChildSumHess += this.gradPairs(insIdx).getHess
+            rightChildSumGrad += this.gradPairs.get(insIdx).getGrad
+            rightChildSumHess += this.gradPairs.get(insIdx).getHess
           }
         }
         leftChildSumGrad = nodeStat.getSumGrad - rightChildSumGrad
@@ -826,8 +832,8 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
               if (index >= 0) {
                 bitset.clear(index)
                 rightCount -= 1
-                leftChildSumGrad += this.gradPairs(insIdx).getGrad
-                leftChildSumHess += this.gradPairs(insIdx).getHess
+                leftChildSumGrad += this.gradPairs.get(insIdx).getGrad
+                leftChildSumHess += this.gradPairs.get(insIdx).getHess
                 searchFrom = index + 1
               }
             }
@@ -850,8 +856,8 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
               if (index >= 0) {
                 bitset.set(index)
                 rightCount += 1
-                rightChildSumGrad += this.gradPairs(insIdx).getGrad
-                rightChildSumHess += this.gradPairs(insIdx).getHess
+                rightChildSumGrad += this.gradPairs.get(insIdx).getGrad
+                rightChildSumHess += this.gradPairs.get(insIdx).getHess
                 searchFrom = index + 1
               }
             }
@@ -1132,7 +1138,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
 
   // check if there is active node
   def hasActiveTNode: Boolean = {
-    LOG.debug("Check actice nodes: [" + this.activeNode.mkString(", ") + "]")
+    LOG.debug("Check active nodes: [" + this.activeNode.mkString(", ") + "]")
     var hasActive: Boolean = false
     var nid: Int = 0
     while (nid < this.maxNodeNum && !hasActive) {

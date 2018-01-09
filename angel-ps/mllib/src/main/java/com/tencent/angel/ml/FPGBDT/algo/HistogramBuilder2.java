@@ -1,6 +1,6 @@
 package com.tencent.angel.ml.FPGBDT.algo;
 
-import com.tencent.angel.ml.FPGBDT.algo.FPRegTreeDataStore.TrainDataStore;
+import com.tencent.angel.ml.FPGBDT.algo.storage.TrainDataStore;
 import com.tencent.angel.ml.GBDT.algo.RegTree.GradPair;
 import com.tencent.angel.ml.GBDT.algo.RegTree.RegTNodeStat;
 import com.tencent.angel.ml.math.vector.DenseFloatVector;

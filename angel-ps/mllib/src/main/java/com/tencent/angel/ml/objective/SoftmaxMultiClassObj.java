@@ -16,6 +16,7 @@
  */
 package com.tencent.angel.ml.objective;
 
+import com.tencent.angel.ml.FPGBDT.algo.storage.FPRegTDataStore;
 import com.tencent.angel.ml.GBDT.algo.RegTree.GradPair;
 import com.tencent.angel.ml.GBDT.algo.RegTree.RegTDataStore;
 import com.tencent.angel.ml.param.RegTParam;
@@ -60,7 +61,7 @@ public class SoftmaxMultiClassObj implements ObjFunc {
   @Override
   public List<GradPair> calGrad(float[] preds, RegTDataStore dataStore, int iteration) {
     assert preds.length == this.numClass * dataStore.labels.length;
-    List<GradPair> rec = new ArrayList<GradPair>();
+    List<GradPair> rec = new ArrayList<GradPair>(preds.length);
     int ndata = preds.length / numClass;
     int labelError = -1;
     float[] tmp = new float[numClass];
@@ -88,6 +89,43 @@ public class SoftmaxMultiClassObj implements ObjFunc {
     if (labelError >= 0 && labelError < numClass) {
       LOG.error(String.format("SoftmaxMultiClassObj: label must be in [0, num_class), "
           + "numClass = %d, but found %d in label", numClass, labelError));
+    }
+    return rec;
+  }
+
+  @Override
+  public List<GradPair> calGrad(float[] preds, FPRegTDataStore dataStore, int iteration) {
+    float[] labels = dataStore.getLabels();
+    float[] weights = dataStore.getWeights();
+    assert preds.length == this.numClass * labels.length;
+    List<GradPair> rec = new ArrayList<GradPair>(preds.length);
+    int ndata = preds.length / numClass;
+    int labelError = -1;
+    float[] tmp = new float[numClass];
+    for (int insIdx = 0; insIdx < ndata; insIdx++) {
+      System.arraycopy(preds, insIdx * numClass, tmp, 0, numClass);
+      Maths.softmax(tmp);
+      int label = (int) labels[insIdx];
+      if (label < 0 || label >= numClass) {
+        labelError = label;
+        label = 0;
+      }
+      float wt = dataStore.getWeight(insIdx);
+      for (int k = 0; k < numClass; ++k) {
+        float p = tmp[k];
+        float h = 2.0f * p * (1.0f - p) * wt;
+        if (label == k) {
+          GradPair pair = new GradPair((p - 1.0f) * wt, h);
+          rec.add(pair);
+        } else {
+          GradPair pair = new GradPair(p * wt, h);
+          rec.add(pair);
+        }
+      }
+    }
+    if (labelError >= 0 && labelError < numClass) {
+      LOG.error(String.format("SoftmaxMultiClassObj: label must be in [0, num_class), "
+        + "numClass = %d, but found %d in label", numClass, labelError));
     }
     return rec;
   }

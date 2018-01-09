@@ -16,6 +16,7 @@
  */
 package com.tencent.angel.ml.objective;
 
+import com.tencent.angel.ml.FPGBDT.algo.storage.FPRegTDataStore;
 import com.tencent.angel.ml.GBDT.algo.RegTree.GradPair;
 import com.tencent.angel.ml.GBDT.algo.RegTree.RegTDataStore;
 import org.apache.commons.logging.Log;
@@ -53,8 +54,9 @@ public class RegLossObj implements ObjFunc {
   public List<GradPair> calGrad(float[] preds, RegTDataStore dataStore, int iteration) {
     assert preds.length > 0;
     assert preds.length == dataStore.labels.length;
-    List<GradPair> rec = new ArrayList<GradPair>();
+
     int ndata = preds.length; // number of data instances
+    List<GradPair> rec = new ArrayList<GradPair>(ndata);
     // check if label in range
     boolean label_correct = true;
     for (int i = 0; i < ndata; i++) {
@@ -67,6 +69,35 @@ public class RegLossObj implements ObjFunc {
       GradPair pair =
           new GradPair(loss.firOrderGrad(p, dataStore.labels[i]) * w, loss.secOrderGrad(p,
                   dataStore.labels[i]) * w);
+      rec.add(pair);
+    }
+    if (!label_correct) {
+      LOG.error(loss.labelErrorMsg());
+    }
+    return rec;
+  }
+
+  @Override
+  public List<GradPair> calGrad(float[] preds, FPRegTDataStore dataStore, int iteration) {
+    assert preds.length > 0;
+    float[] labels = dataStore.getLabels();
+    float[] weights = dataStore.getWeights();
+    assert preds.length == labels.length;
+
+    int ndata = preds.length; // number of data instances
+    List<GradPair> rec = new ArrayList<GradPair>(ndata);
+    // check if label in range
+    boolean label_correct = true;
+    for (int i = 0; i < ndata; i++) {
+      float p = loss.transPred(preds[i]);
+      float w = dataStore.getWeight(i);
+      if (labels[i] == 1.0f)
+        w *= scalePosWeight;
+      if (!loss.checkLabel(labels[i]))
+        label_correct = false;
+      GradPair pair =
+        new GradPair(loss.firOrderGrad(p, labels[i]) * w,
+          loss.secOrderGrad(p, labels[i]) * w);
       rec.add(pair);
     }
     if (!label_correct) {

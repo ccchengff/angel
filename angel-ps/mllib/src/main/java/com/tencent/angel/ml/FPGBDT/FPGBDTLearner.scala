@@ -4,7 +4,7 @@ import java.util
 
 import com.tencent.angel.conf.AngelConf
 import com.tencent.angel.ml.FPGBDT.algo.{FPGBDTController, FPGBDTPhase}
-import com.tencent.angel.ml.FPGBDT.algo.FPRegTreeDataStore.{TestDataStore, TrainDataStore}
+import com.tencent.angel.ml.FPGBDT.algo.storage.{TestDataStore, TrainDataStore}
 import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch
 import com.tencent.angel.ml.FPGBDT.psf._
 import com.tencent.angel.ml.FPGBDT.psf.ClearUpdate.ClearUpdateParam

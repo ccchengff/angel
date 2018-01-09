@@ -1,4 +1,4 @@
-package com.tencent.angel.ml.FPGBDT.algo.FPRegTreeDataStore
+package com.tencent.angel.ml.FPGBDT.algo.storage
 
 import java.util
 
@@ -6,16 +6,15 @@ import com.tencent.angel.ml.math.vector.{SparseDoubleSortedVector, SparseDoubleV
 import com.tencent.angel.ml.param.FPGBDTParam
 import com.tencent.angel.ml.utils.Maths
 import com.yahoo.sketches.quantiles.DoublesSketch
-import org.apache.commons.logging.LogFactory
+import org.apache.commons.logging.{Log, LogFactory}
 
 /**
   * Created by ccchengff on 2017/11/16.
   */
-class TrainDataStore(param: FPGBDTParam, _numInstance: Int) {
-  val LOG = LogFactory.getLog(classOf[TrainDataStore])
+class TrainDataStore(param: FPGBDTParam, numInstance: Int) extends FPRegTDataStore(param, numInstance) {
+  val LOG: Log = LogFactory.getLog(classOf[TrainDataStore])
 
   private val numFeature: Int = param.featHi - param.featLo
-  val numInstance: Int = _numInstance
 
   private val featRows = new Array[SparseDoubleSortedVector](numFeature)
   private val featIndices = new Array[Array[Int]](numFeature)
@@ -24,9 +23,6 @@ class TrainDataStore(param: FPGBDTParam, _numInstance: Int) {
   //private val zeroBins = new Array[Int](numFeature)
   private val splits = new Array[Array[Float]](param.numFeature)
   private val zeroBins = new Array[Int](param.numFeature)
-  var labels: Array[Float] = _
-  var preds: Array[Float] = _
-  var weights: Array[Float] = _
 
   //def getFeatRow(fid: Int) = featRows(fid - param.featLo)
 
@@ -172,29 +168,5 @@ class TrainDataStore(param: FPGBDTParam, _numInstance: Int) {
   def getZeroBin(fid: Int) = zeroBins(fid)
 
   def getZeroBins = zeroBins
-
-  def getLabel(i: Int) = labels(i)
-
-  def getLabels = labels
-
-  def setLabels(labels: Array[Float]): Unit = {
-    this.labels = labels
-  }
-
-  def getPred(i: Int) = preds(i)
-
-  def getPreds = preds
-
-  def setPreds(preds: Array[Float]): Unit = {
-    this.preds = preds
-  }
-
-  def getWeight(i: Int) = weights(i)
-
-  def getWeights = weights
-
-  def setWeights(weights: Array[Float]): Unit = {
-    this.weights = weights
-  }
 
 }

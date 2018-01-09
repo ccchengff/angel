@@ -16,6 +16,7 @@
  */
 package com.tencent.angel.ml.objective;
 
+import com.tencent.angel.ml.FPGBDT.algo.storage.FPRegTDataStore;
 import com.tencent.angel.ml.GBDT.algo.RegTree.GradPair;
 import com.tencent.angel.ml.GBDT.algo.RegTree.RegTDataStore;
 
@@ -33,6 +34,8 @@ public interface ObjFunc {
    * number. return:_gpair output of get gradient, saves gradient and second order gradient in
    */
   List<GradPair> calGrad(float[] preds, RegTDataStore info, int iteration);
+
+  List<GradPair> calGrad(float[] preds, FPRegTDataStore info, int iteration);
 
   /**
    * transform prediction values, this is only called when Prediction is called preds: prediction
