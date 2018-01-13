@@ -92,7 +92,7 @@ class TrainDataStore(param: FPGBDTParam, numInstance: Int) extends FPRegTDataSto
       var t: Int = 0
       while (t < size - 1 && arr(t + 1) < 0.0f)
         t += 1
-      zeroIdx
+      zeroIdx = t
     }
     zeroIdx
   }
