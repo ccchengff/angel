@@ -97,12 +97,17 @@ object MLConf {
   val ANGEL_ACTION_TYPE = "actionType"
 
   // GBDT Params
+  val ML_GBDT_CLASS_NUM = "ml.gbdt.class.num"
+  val DEFAULT_ML_GBDT_CLASS_NUM = 2
   val ML_GBDT_TREE_NUM = "ml.gbdt.tree.num"
   val DEFAULT_ML_GBDT_TREE_NUM = 10
   val ML_GBDT_TREE_DEPTH = "ml.gbdt.tree.depth"
   val DEFAULT_ML_GBDT_TREE_DEPTH = 5
+  val ML_GBDT_MAX_NODE_NUM = "ml.gbdt.max.node.num"
   val ML_GBDT_SPLIT_NUM = "ml.gbdt.split.num"
   val DEFAULT_ML_GBDT_SPLIT_NUM = 5
+  val ML_GBDT_ROW_SAMPLE_RATIO = "ml.gbdt.row.sample.ratio"
+  val DEFAULT_ML_GBDT_ROW_SAMPLE_RATIO = 1
   val ML_GBDT_SAMPLE_RATIO = "ml.gbdt.sample.ratio"
   val DEFAULT_ML_GBDT_SAMPLE_RATIO = 1
   val ML_GBDT_MIN_CHILD_WEIGHT = "ml.gbdt.min.child.weight"

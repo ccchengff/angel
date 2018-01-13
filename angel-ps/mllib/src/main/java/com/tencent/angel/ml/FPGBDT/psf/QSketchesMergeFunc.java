@@ -31,6 +31,13 @@ public class QSketchesMergeFunc extends UpdateFunc {
     super(param);
   }
 
+  public QSketchesMergeFunc(int matrixId, boolean updateClock, int[] rowIndexes,
+                            int numWorker, int numQuantile,
+                            HeapQuantileSketch[] sketches, long[] estimateNs) {
+    super(new QSketchesMergeParam(matrixId, updateClock, rowIndexes,
+            numWorker, numQuantile, sketches, estimateNs));
+  }
+
   public QSketchesMergeFunc() {
     super(null);
   }
