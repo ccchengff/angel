@@ -5,7 +5,7 @@ import java.util
 import com.tencent.angel.conf.AngelConf
 import com.tencent.angel.ml.FPGBDT.algo.{FPGBDTController, FPGBDTPhase}
 import com.tencent.angel.ml.FPGBDT.algo.storage.{TestDataStore, TrainDataStore}
-import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch
+import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.{HeapQuantileSketch, SketchUtils}
 import com.tencent.angel.ml.FPGBDT.psf._
 import com.tencent.angel.ml.FPGBDT.psf.ClearUpdate.ClearUpdateParam
 import com.tencent.angel.ml.FPGBDT.psf.QSketchesMergeFunc.QSketchesMergeParam
@@ -13,10 +13,13 @@ import com.tencent.angel.ml.MLLearner
 import com.tencent.angel.ml.conf.MLConf
 import com.tencent.angel.ml.feature.LabeledData
 import com.tencent.angel.ml.math.vector._
+import com.tencent.angel.ml.matrix.{MatrixContext, MatrixMeta, MatrixOpLogType}
 import com.tencent.angel.ml.matrix.psf.update.enhance.VoidResult
 import com.tencent.angel.ml.metric.ErrorMetric
 import com.tencent.angel.ml.model.MLModel
 import com.tencent.angel.ml.param.FPGBDTParam
+import com.tencent.angel.protobuf.generated.MLProtos.RowType
+import com.tencent.angel.psagent.matrix.MatrixClient
 import com.tencent.angel.worker.storage.DataBlock
 import com.tencent.angel.worker.task.TaskContext
 import org.apache.commons.logging.LogFactory
@@ -513,12 +516,27 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     // 3.2. get candidate splits
     val sketchModel = model.getPSModel(FPGBDTModel.FEAT_ROW_MAT)
     val matrixId = sketchModel.getMatrixId()
-    needFlushMatrices.clear()
-    needFlushMatrices.add(FPGBDTModel.FEAT_ROW_MAT)
 
     var transposeBatchSize: Int = 1024
     if (transposeBatchSize == -1 || transposeBatchSize > numFeature)
       transposeBatchSize = numFeature
+
+    //if (ctx.getTaskIndex == 0) {
+    //  val maxNnz = nnzNumVec.getValues.max
+    //  val bufCapacity = 1 + SketchUtils.needBufferCapacity(HeapQuantileSketch.DEFAULT_K, maxNnz.toLong)
+    //  val featureRowBufSize = 1 + 2 * numWorker + Math.ceil(maxNnz * 5 / 4).toInt
+    //  val matrixContext = new MatrixContext(FPGBDTModel.FEAT_ROW_MAT,
+    //    transposeBatchSize, Math.max(bufCapacity, featureRowBufSize),
+    //    -1, Math.max(bufCapacity, featureRowBufSize))
+    //  matrixContext.setMatrixOpLogType(MatrixOpLogType.DENSE_FLOAT)
+    //  matrixContext.setRowType(RowType.T_FLOAT_DENSE)
+    //  val timeOutMs = ctx.getConf.getInt("angel.worker.matrixtransfer.request.timeout.ms", 60000)
+    //  ctx.createMatrix(matrixContext, timeOutMs)
+    //}
+    //FPGBDTLearner.sync(model)
+    //val featRowsMatClient = ctx.getMatrix(FPGBDTModel.FEAT_ROW_MAT)
+    //val matrixId = featRowsMatClient.getMatrixId
+
     var fid: Int = 0
     var rowIndexes = (0 until transposeBatchSize).toArray
     while (fid < numFeature) {
@@ -544,12 +562,16 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       // 3.2.2. push to PS and merge on PS
       sketchModel.update(new QSketchesMergeFunc(new QSketchesMergeParam(
         matrixId, true, rowIndexes, numWorker, numSplit, sketches, estimateNs))).get
+      //featRowsMatClient.update(new QSketchesMergeFunc(new QSketchesMergeParam(
+      //  matrixId, true, rowIndexes, numWorker, numSplit, sketches, estimateNs))).get
       FPGBDTLearner.sync(model)
       // 3.2.3. pull quantiles from PS
       var getRowIndexes: Array[Int] = rowIndexes.clone()
       while (getRowIndexes != null) {
         val getResult = sketchModel.get(new QSketchesGetFunc(
           matrixId, rowIndexes, numWorker, numSplit)).asInstanceOf[QSketchesGetResult]
+        //val getResult = featRowsMatClient.get(new QSketchesGetFunc(
+        //  matrixId, rowIndexes, numWorker, numSplit)).asInstanceOf[QSketchesGetResult]
         val retryList: util.List[Int] = new util.ArrayList[Int]()
         for (rowId <- rowIndexes) {
           val quantiles: Array[Float] = getResult.getQuantiles(rowId)
@@ -589,6 +611,7 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
       }
       // 3.2.4. push to PS
       sketchModel.update(new FeatureRowsUpdateFunc(setFeatureRowParam)).get
+      //featRowsMatClient.update(new FeatureRowsUpdateFunc(setFeatureRowParam)).get
       FPGBDTLearner.sync(model)
       // 3.2.5. pull feature rows from PS
       if (param.featLo < stop && param.featHi > start) {
@@ -598,6 +621,8 @@ class FPGBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
         LOG.debug(s"Get row range: [$from, $to), feature range: [${from + start}, ${to + start})")
         val featureRows = sketchModel.get(new FeatureRowsGetFunc[Byte](matrixId, numWorker,
           getRowIndexes, numSplit)).asInstanceOf[FeatureRowsGetResult].getFeatureRows
+        //val featureRows = featRowsMatClient.get(new FeatureRowsGetFunc[Byte](matrixId, numWorker,
+        //  getRowIndexes, numSplit)).asInstanceOf[FeatureRowsGetResult].getFeatureRows
         val iter = featureRows.entrySet().iterator()
         while (iter.hasNext) {
           val entry = iter.next()

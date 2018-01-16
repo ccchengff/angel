@@ -5,8 +5,8 @@ import com.tencent.angel.ml.treemodels.tree.basic.Tree;
 
 public class RegTree extends Tree<RegTParam, RegTNode> {
 
-    public RegTree() {
-        super();
+    public RegTree(RegTParam param) {
+        super(param);
         RegTNode root = new RegTNode(0, null, param.numClass);
         this.nodes.put(0, root);
     }

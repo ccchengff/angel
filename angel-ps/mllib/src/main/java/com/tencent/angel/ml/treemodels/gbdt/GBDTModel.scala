@@ -35,6 +35,7 @@ object GBDTModel {
   val LOCAL_SPLIT_FEAT_MAT = "gbdt.local.split.feature"
   val LOCAL_SPLIT_VALUE_MAT = "gbdt.local.split.value"
   val LOCAL_SPLIT_GAIN_MAT = "gbdt.local.split.gain"
+  val SPLIT_RESULT_MAT = "gbdt.split.result"
 
 
   private val LOG: Log = LogFactory.getLog(classOf[GBDTModel])
@@ -59,6 +60,9 @@ abstract class GBDTModel(conf: Configuration, _ctx: TaskContext = null) extends 
   }
 
   protected val numInstance = conf.getInt("angel.ml.train.data.num", 100)
+  protected val numFeatNnz = conf.getInt("angel.ml.max.feat.nnz", 100)
+
+  LOG.info(s"numFeature[$numFeature], numInstance[$numInstance], numFeatNnz[$numFeatNnz]")
 
   // Matrix 0: synchronization
   private val syncMat = PSModel(GBDTModel.SYNC, 1, 1)
@@ -84,7 +88,7 @@ abstract class GBDTModel(conf: Configuration, _ctx: TaskContext = null) extends 
 
   // Matrix 3: global quantile sketches
   // TODO: create at runtime (after max nnz of feature is known)
-  private val maxQSketchSize = 1 + SketchUtils.needBufferCapacity(HeapQuantileSketch.DEFAULT_K, numInstance.toLong)
+  private val maxQSketchSize = 1 + SketchUtils.needBufferCapacity(HeapQuantileSketch.DEFAULT_K, numFeatNnz.toLong)
   private val sketchMat = PSModel(GBDTModel.SKETCH_MAT, batchSize, maxQSketchSize, batchSize / numPS, maxQSketchSize)
     .setRowType(RowType.T_FLOAT_DENSE)
     .setOplogType("DENSE_FLOAT")
@@ -99,28 +103,28 @@ abstract class GBDTModel(conf: Configuration, _ctx: TaskContext = null) extends 
 
   // Matrix 5: split value
   private val splitValue = PSModel(GBDTModel.SPLIT_VALUE_MAT, numTree, maxNodeNum, numTree / numPS, maxNodeNum)
-    .setRowType(RowType.T_DOUBLE_DENSE)
-    .setOplogType("DENSE_DOUBLE")
+    .setRowType(RowType.T_FLOAT_DENSE)
+    .setOplogType("DENSE_FLOAT")
   addPSModel(GBDTModel.SPLIT_VALUE_MAT, splitValue)
 
   // Matrix 5: split loss gain
   private val splitGain = PSModel(GBDTModel.SPLIT_GAIN_MAT, numTree, maxNodeNum, numTree / numPS, maxNodeNum)
-    .setRowType(RowType.T_DOUBLE_DENSE)
-    .setOplogType("DENSE_DOUBLE")
+    .setRowType(RowType.T_FLOAT_DENSE)
+    .setOplogType("DENSE_FLOAT")
     .setNeedSave(false)
   addPSModel(GBDTModel.SPLIT_GAIN_MAT, splitGain)
 
   // Matrix 7: node's grad stats
   private val nodeGradStats = PSModel(GBDTModel.NODE_GRAD_MAT, numTree, 2 * maxNodeNum, numTree / numPS, 2 * maxNodeNum)
-    .setRowType(RowType.T_DOUBLE_DENSE)
-    .setOplogType("DENSE_DOUBLE")
+    .setRowType(RowType.T_FLOAT_DENSE)
+    .setOplogType("DENSE_FLOAT")
     .setNeedSave(false)
   addPSModel(GBDTModel.NODE_GRAD_MAT, nodeGradStats)
 
   // Matrix 8: node's predict value
   private val nodePred = PSModel(GBDTModel.NODE_PRED_MAT, numTree, maxNodeNum, numTree / numPS, maxNodeNum)
-    .setRowType(RowType.T_DOUBLE_DENSE)
-    .setOplogType("DENSE_DOUBLE")
+    .setRowType(RowType.T_FLOAT_DENSE)
+    .setOplogType("DENSE_FLOAT")
   addPSModel(GBDTModel.NODE_PRED_MAT, nodePred)
 
 

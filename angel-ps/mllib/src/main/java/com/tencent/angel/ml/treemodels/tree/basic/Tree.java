@@ -6,11 +6,12 @@ import java.util.HashMap;
 import java.util.Map;
 
 public abstract class Tree<TParam extends TreeParam, Node extends TNode> {
-    protected TParam param;
+    protected final TParam param;
     private int[] fset; // features used in this tree, null means all the features are used
     protected Map<Integer, Node> nodes; // nodes in the tree
 
-    public Tree() {
+    public Tree(TParam param) {
+        this.param = param;
         this.nodes = new HashMap<>();
     }
 

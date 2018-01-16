@@ -1,5 +1,6 @@
 package com.tencent.angel.ml.treemodels.storage;
 
+import com.tencent.angel.exception.AngelException;
 import com.tencent.angel.ml.FPGBDT.psf.QSketchesGetResult;
 import com.tencent.angel.ml.FPGBDT.psf.QSketchesGetFunc;
 import com.tencent.angel.ml.FPGBDT.psf.QSketchesMergeFunc;
@@ -12,11 +13,12 @@ import com.tencent.angel.worker.storage.DataBlock;
 import com.tencent.angel.worker.task.TaskContext;
 
 import java.util.Arrays;
+import java.util.Set;
 
 public abstract class DataStore {
-    TaskContext taskContext;
+    protected final TaskContext taskContext;
     // param
-    protected TreeParam param;
+    protected final TreeParam param;
     protected int numInstances;
     protected int numFeatures;
     // info of instances
@@ -55,8 +57,8 @@ public abstract class DataStore {
         return labels;
     }
 
-    public float[] getPreds(int index) {
-        return preds;
+    public float getPred(int index) {
+        return preds[index];
     }
 
     public float[] getPreds() {
@@ -71,8 +73,20 @@ public abstract class DataStore {
         return weights;
     }
 
+    public float getSplit(int fid, int splitId) {
+        return splits[fid][splitId];
+    }
+
+    public float[] getSplits(int fid) {
+        return splits[fid];
+    }
+
     public float[][] getSplits() {
         return splits;
+    }
+
+    public int getZeroBin(int fid) {
+        return zeroBins[fid];
     }
 
     public int[] getZeroBins() {
@@ -103,22 +117,36 @@ public abstract class DataStore {
         this.zeroBins = zeroBins;
     }
 
+    /**
+     * Find the last split point that is not larger than 0, and return its index
+     *
+     * @param arr
+     * @return
+     */
     public static int findZeroBin(float[] arr) {
         int size = arr.length;
         int zeroIdx;
         if (arr[0] > 0.0f) {
             zeroIdx = 0;
-        } else if (arr[size - 1] < 0.0f) {
+        } else if (arr[size - 1] <= 0.0f) {
             zeroIdx = size - 1;
         } else {
             zeroIdx = 0;
-            while (zeroIdx < size - 1 && arr[zeroIdx + 1] < 0.0f) {
+            while (zeroIdx < size - 1 && arr[zeroIdx + 1] <= 0.0f) {
                 zeroIdx++;
             }
         }
         return zeroIdx;
     }
 
+    /**
+     * Find the last split point that is not larger than x, and return its index
+     *
+     * @param x
+     * @param arr
+     * @param zeroIdx
+     * @return
+     */
     public static int indexOf(float x, float[] arr, int zeroIdx) {
         int size = arr.length;
         int left = zeroIdx;
@@ -128,7 +156,7 @@ public abstract class DataStore {
         } else {
             right = size - 1;
         }
-        while (left <= right) {
+        while (right - left > 1) {
             int mid = left + ((right - left) >> 1);
             if (arr[mid] <= x) {
                 if (mid + 1 == size || arr[mid + 1] > x) {
@@ -137,10 +165,10 @@ public abstract class DataStore {
                     left = mid + 1;
                 }
             } else {
-                right = mid - 1;
+                right = mid;
             }
         }
-        return zeroIdx;
+        return left;
     }
 
     public int indexOf(float x, int fid) {
@@ -158,7 +186,7 @@ public abstract class DataStore {
      * @return
      */
     protected float[][] mergeSketchAndPullQuantiles(HeapQuantileSketch[] sketches, int[] estimateNs,
-                                                    GBDTModel model) throws Exception {
+                                                    final GBDTModel model) throws Exception {
         PSModel sketchModel = model.getPSModel(GBDTModel.SKETCH_MAT());
         int matrixId = sketchModel.getMatrixId();
 
@@ -171,12 +199,13 @@ public abstract class DataStore {
         int fid = 0;
         int batchSize = 1024;
         int[] rowIndexes = new int[batchSize];
+        Arrays.setAll(rowIndexes, i -> i);
         HeapQuantileSketch[] batchSketches = new HeapQuantileSketch[batchSize];
         long[] batchEstimateNs = new long[batchSize];
-        Arrays.setAll(rowIndexes, i -> i);
         while (fid < numFeature) {
             if (fid + batchSize > numFeature) {
                 batchSize = numFeature - fid;
+                rowIndexes = new int[batchSize];
                 Arrays.setAll(rowIndexes, i -> i);
                 batchSketches = new HeapQuantileSketch[batchSize];
                 batchEstimateNs = new long[batchSize];
@@ -201,6 +230,43 @@ public abstract class DataStore {
             fid += batchSize;
         }
         return quantiles;
+    }
+
+    /**
+     * Ensure labels are in {0, 1, ..., #class - 1}
+     *
+     * @param numClass
+     */
+    public void ensureLabel(int numClass) {
+        if (numClass == 2) {
+            for (int i = 0; i < labels.length; i++) {
+                if (labels[i] != 1) {
+                    labels[i] = 0;
+                }
+            }
+        } else {
+            boolean[] appear = new boolean[numClass];
+            int numAppeared = 0;
+            for (float label : labels) {
+                int t = (int) label;
+                if (t >= 0 && t < numClass && !appear[t]) {
+                    appear[t] = true;
+                    numAppeared++;
+                    if (numAppeared == numClass) {
+                        return;
+                    }
+                }
+            }
+            if (numAppeared == numClass - 1 && !appear[0]) {
+                // labels start from 1 instead of 0
+                for (int i = 0; i < labels.length; i++) {
+                    labels[i] -= 1;
+                }
+            } else {
+                throw new AngelException(String.format("Labels should be in [%d, %d]",
+                        0, numClass - 1));
+            }
+        }
     }
 
 }

@@ -5,7 +5,7 @@ import com.tencent.angel.worker.task.TaskContext
 import org.apache.commons.logging.{Log, LogFactory}
 import org.apache.hadoop.conf.Configuration
 
-object FPGBDTModel {
+object DPGBDTModel {
   private val LOG: Log = LogFactory.getLog(classOf[DPGBDTModel])
 
   def apply(conf: Configuration, _ctx: TaskContext = null): DPGBDTModel = new DPGBDTModel(conf, _ctx)

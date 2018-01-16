@@ -6,6 +6,8 @@ public class GradPair {
     private float grad;  // gradient value
     private float hess;  // hessian value
 
+    public GradPair() {}
+
     public GradPair(float grad, float hess) {
         this.grad = grad;
         this.hess = hess;
@@ -39,11 +41,6 @@ public class GradPair {
 
     public void add(GradPair p) {
         this.add(p.grad, p.hess);
-    }
-
-    public void setSubstract(GradPair a, GradPair b) {
-        grad = a.grad - b.grad;
-        hess = a.hess - b.hess;
     }
 
     public float calcWeight(GBDTParam param) {

@@ -22,7 +22,7 @@ class FPGBDTModel(conf: Configuration, _ctx: TaskContext = null) extends GBDTMod
 
   // Matrix 9: feature rows
   // TODO: create at runtime (after max nnz of feature is known)
-  private val maxFeatRowSize = 1 + 2 * numWorker + Math.ceil(numInstance * 5 / 4).toInt
+  private val maxFeatRowSize = 1 + 2 * numWorker + Math.ceil(numFeatNnz * 5 / 4).toInt
   private val featRowMat = PSModel(GBDTModel.FEAT_ROW_MAT, batchSize, maxFeatRowSize, batchSize / numPS, maxFeatRowSize)
     .setRowType(RowType.T_FLOAT_DENSE)
     .setOplogType("DENSE_FLOAT")
@@ -61,6 +61,15 @@ class FPGBDTModel(conf: Configuration, _ctx: TaskContext = null) extends GBDTMod
     .setHogwild(true)
     .setNeedSave(false)
   addPSModel(GBDTModel.LOCAL_SPLIT_GAIN_MAT, localBestGain)
+
+  // Matrix 15: split result
+  // TODO: create at runtime (after number of instances is known)
+  private val colNum = Math.ceil(numInstance / 32.0).toInt
+  private val splitResult = PSModel(GBDTModel.SPLIT_RESULT_MAT, 1, colNum, 1, colNum)
+    .setRowType(RowType.T_INT_DENSE)
+    .setOplogType("DENSE_INT")
+    .setNeedSave(false)
+  addPSModel(GBDTModel.SPLIT_RESULT_MAT, splitResult)
 
   super.setSavePath(conf)
   super.setLoadPath(conf)

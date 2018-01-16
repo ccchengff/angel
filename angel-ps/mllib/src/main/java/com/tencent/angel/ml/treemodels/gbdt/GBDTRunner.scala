@@ -4,6 +4,7 @@ import com.tencent.angel.conf.AngelConf
 import com.tencent.angel.exception.AngelException
 import com.tencent.angel.ml.MLRunner
 import com.tencent.angel.ml.conf.MLConf
+import com.tencent.angel.ml.treemodels.gbdt.dp.DPGBDTModel
 import com.tencent.angel.ml.treemodels.gbdt.fp.FPGBDTModel
 import org.apache.commons.logging.{Log, LogFactory}
 import org.apache.hadoop.conf.Configuration
@@ -15,6 +16,17 @@ class GBDTRunner extends MLRunner {
     * Training job to obtain a model
     */
   override def train(conf: Configuration): Unit = {
+    var mem = conf.getInt(AngelConf.ANGEL_WORKER_MEMORY_GB, 1) * 1000
+    var javaOpts = s"-Xmx${mem}M -Xms${mem}M -XX:+UseConcMarkSweepGC -XX:+PrintGCTimeStamps -XX:+PrintGCDetails"
+    LOG.info(javaOpts)
+    conf.set(AngelConf.ANGEL_WORKER_JAVA_OPTS, javaOpts)
+
+    mem = conf.getInt(AngelConf.ANGEL_PS_MEMORY_GB, 1) * 1000
+    javaOpts = s"-Xmx${mem}M -Xms${mem}M -XX:+UseConcMarkSweepGC -XX:+PrintGCTimeStamps -XX:+PrintGCDetails"
+    conf.set(AngelConf.ANGEL_PS_JAVA_OPTS, javaOpts)
+    LOG.info(javaOpts)
+
+
     var numFeature = conf.getInt(MLConf.ML_FEATURE_NUM, MLConf.DEFAULT_ML_FEATURE_NUM)
     val numPS = conf.getInt(AngelConf.ANGEL_PS_NUMBER, AngelConf.DEFAULT_ANGEL_PS_NUMBER)
 
@@ -24,10 +36,10 @@ class GBDTRunner extends MLRunner {
       LOG.info(s"PS num: $numPS, true feature num: $numFeature")
     }
 
-    val parallelMode = conf.get("ml.gbdt.parallel.mode", "FeatureParallel")
+    val parallelMode = conf.get(MLConf.ML_GBDT_PARALLEL_MODE, MLConf.DEFAULT_ML_GBDT_PARALLEL_MODE)
     parallelMode match {
-      case "FeatureParallel" => train(conf, FPGBDTModel(conf), classOf[GBDTTrainTask])
-      case "DataParallel" => throw new AngelException("DataParallel not implemented")
+      case ParallelMode.DATA_PARALLEL => train(conf, DPGBDTModel(conf), classOf[GBDTTrainTask])
+      case ParallelMode.FEATURE_PARALLEL => train(conf, FPGBDTModel(conf), classOf[GBDTTrainTask])
       case _ => throw new AngelException("No such parallel mode: " + parallelMode)
     }
   }

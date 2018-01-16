@@ -17,6 +17,11 @@ public class RegTNodeStat extends TNodeStat {
         return nodeWeight;
     }
 
+    public float calcGain(GBDTParam param) {
+        gain = param.calcGain(sumGrad, sumHess);
+        return gain;
+    }
+
     public float getSumGrad() {
         return sumGrad;
     }

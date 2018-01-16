@@ -1,12 +1,19 @@
 package com.tencent.angel.ml.treemodels.storage;
 
+import com.tencent.angel.exception.AngelException;
 import com.tencent.angel.ml.feature.LabeledData;
 import com.tencent.angel.ml.math.vector.DenseIntVector;
 import com.tencent.angel.ml.math.vector.SparseDoubleSortedVector;
 import com.tencent.angel.ml.model.PSModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
 import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch;
+import com.tencent.angel.ml.treemodels.param.GBDTParam;
+import com.tencent.angel.ml.treemodels.param.RegTParam;
 import com.tencent.angel.ml.treemodels.param.TreeParam;
+import com.tencent.angel.ml.treemodels.tree.basic.SplitEntry;
+import com.tencent.angel.ml.treemodels.tree.basic.TNode;
+import com.tencent.angel.ml.treemodels.tree.regression.RegTNode;
+import com.tencent.angel.ml.treemodels.tree.regression.RegTree;
 import com.tencent.angel.worker.storage.DataBlock;
 import com.tencent.angel.worker.task.TaskContext;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
@@ -32,7 +39,7 @@ public class DPDataStore extends DataStore {
     }
 
     @Override
-    public void init(DataBlock<LabeledData> dataStorage, GBDTModel model) throws Exception {
+    public void init(DataBlock<LabeledData> dataStorage, final GBDTModel model) throws Exception {
         long initStart = System.currentTimeMillis();
 
         LOG.info("Create data parallel data meta, numFeature=" + numFeatures);
@@ -45,6 +52,8 @@ public class DPDataStore extends DataStore {
         }
         // 2. turn feature values into bin indexes
         findBins(instances);
+        // 3. ensure labels
+        ensureLabel(((GBDTParam) param).numClass);
 
         LOG.info(String.format("Create data-parallel data meta cost %d ms, numInstance=%d",
                 (System.currentTimeMillis() - initStart), numInstances));
@@ -64,20 +73,17 @@ public class DPDataStore extends DataStore {
             data = dataStorage.read();
         }
         numInstances = instances.size();
-        // 2. set info for each instance
+        // 2. set label for each instance
         labels = new float[numInstances];
-        preds = new float[numInstances];
-        weights = new float[numInstances];
         for (int insId = 0; insId < numInstances; insId++) {
             labels[insId] = labelsList.getFloat(insId);
         }
-        Arrays.fill(weights, 1.0f);
 
         return instances;
     }
 
     private List<SparseDoubleSortedVector> readDataAndCreateSketch(
-            DataBlock<LabeledData> dataStorage, GBDTModel model) throws Exception {
+            DataBlock<LabeledData> dataStorage, final GBDTModel model) throws Exception {
         long readStart = System.currentTimeMillis();
         // 1. read data
         List<SparseDoubleSortedVector> instances = new ArrayList<>(dataStorage.size());
@@ -118,14 +124,20 @@ public class DPDataStore extends DataStore {
 
         workerNumIns = ((DenseIntVector) workerInsModel.getRow(0)).getValues();
         nnzGlobal = ((DenseIntVector) nnzModel.getRow(0)).getValues();
-        // 3. set info for each instance
+
+        int globalNumIns = 0;
+        for (int workerId = 0; workerId < param.numWorker; workerId++) {
+            globalNumIns += workerNumIns[workerId];
+        }
+        LOG.info(String.format("Worker[%d] has %d instances, " +
+                        "instance number of all workers: %s, %d instances in total",
+                taskContext.getTaskIndex(), numInstances,
+                Arrays.toString(workerNumIns), globalNumIns));
+        // 3. set label for each instance
         labels = new float[numInstances];
-        preds = new float[numInstances];
-        weights = new float[numInstances];
         for (int insId = 0; insId < numInstances; insId++) {
             labels[insId] = labelsList.getFloat(insId);
         }
-        Arrays.fill(weights, 1.0f);
         // 4. create sketches
         createSketch(instances, nnzLocal, nnzGlobal, model);
 
@@ -136,7 +148,7 @@ public class DPDataStore extends DataStore {
 
     private void createSketch(List<SparseDoubleSortedVector> instances,
                               int[] nnzLocal, int[] nnzGlobal,
-                              GBDTModel model) throws Exception {
+                              final GBDTModel model) throws Exception {
         long createStart = System.currentTimeMillis();
         // 1. create local quantile sketches
         HeapQuantileSketch[] sketches = new HeapQuantileSketch[numFeatures];
@@ -174,6 +186,48 @@ public class DPDataStore extends DataStore {
                 int fid = insIndices[insId][i];
                 float fvalue = (float) values[i];
                 insBins[insId][i] = indexOf(fvalue, fid);
+            }
+        }
+    }
+
+    public void additiveUpdatePreds(RegTree tree, RegTParam regTParam) {
+        for (int insId = 0; insId < numInstances; insId++) {
+            TNode node = tree.getRoot();
+            while (node != null && !node.isLeaf()) {
+                SplitEntry splitEntry = node.getSplitEntry();
+                int splitFid = splitEntry.getFid();
+                float splitFvalue = splitEntry.getFvalue();
+                int index = Arrays.binarySearch(insIndices[insId], splitFid);
+                if (index >= 0) {
+                    int binId = insBins[insId][index];
+                    float insValue = splits[splitFid][binId];
+                    if (insValue < splitFvalue) {
+                        node = node.getLeftChild();
+                    } else {
+                        node = node.getRightChild();
+                    }
+                } else {
+                    boolean defaultLeft = splitFvalue >= 0.0f;
+                    if (defaultLeft) {
+                        node = node.getLeftChild();
+                    } else {
+                        node = node.getRightChild();
+                    }
+                }
+            }
+            if (node == null) {
+                throw new AngelException("Instance gets into null node");
+            }
+            else {
+                if (regTParam.numClass == 2) {
+                    float leafWeight = ((RegTNode) node).getNodeStat().getNodeWeight();
+                    preds[insId] += leafWeight * regTParam.learningRate;
+                } else {
+                    for (int i = 0; i < regTParam.numClass; i++) {
+                        float leafWeight = ((RegTNode) node).getNodeStat(i).getNodeWeight();
+                        preds[insId * regTParam.numClass + i] += leafWeight * regTParam.learningRate;
+                    }
+                }
             }
         }
     }

@@ -2,16 +2,19 @@ package com.tencent.angel.ml.treemodels.gbdt.dp;
 
 import com.tencent.angel.ml.treemodels.gbdt.GBDTController;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
+import com.tencent.angel.ml.treemodels.gbdt.ParallelMode;
 import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.storage.DPDataStore;
 import com.tencent.angel.worker.task.TaskContext;
+import scala.Tuple1;
 
-public class DPGBDTController extends GBDTController<DPDataStore, DPDataStore> {
+public class DPGBDTController extends GBDTController<DPDataStore> {
     private int[] nodeStats;  // used for multi-batch histogram building
 
-    public DPGBDTController(TaskContext taskContext, GBDTParam param, GBDTModel model,
+    public DPGBDTController(TaskContext taskContext, String parallelMode,
+                            GBDTParam param, GBDTModel model,
                             DPDataStore dpDataStore, DPDataStore validDataStore) {
-        super(taskContext, param, model, dpDataStore, validDataStore);
+        super(taskContext, parallelMode, param, model, dpDataStore, validDataStore);
     }
 
     @Override
@@ -31,12 +34,12 @@ public class DPGBDTController extends GBDTController<DPDataStore, DPDataStore> {
     }
 
     @Override
-    public void findSplit() {
+    public void findSplit() throws Exception {
 
     }
 
     @Override
-    public void afterSplit() {
+    public void afterSplit() throws Exception {
 
     }
 }

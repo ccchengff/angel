@@ -180,9 +180,12 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
       if (this.activeNode(nid) == 2) {
         readyList.add(nid)
         if (2 * nid + 1 >= this.maxNodeNum) {
+          //resetActiveTNode(nid)
+          //val baseWeight: Float = this.forest(this.currentTree).stats.get(nid).baseWeight
+          //setNodeToLeaf(nid, baseWeight)
+          val leafValue = this.forest(this.currentTree).stats.get(nid).baseWeight
+          setNodeToLeaf(nid, leafValue)
           resetActiveTNode(nid)
-          val baseWeight: Float = this.forest(this.currentTree).stats.get(nid).baseWeight
-          setNodeToLeaf(nid, baseWeight)
         }
         else {
           if (this.nodePosEnd(nid) - this.nodePosStart(nid) >= 1000) {
@@ -271,8 +274,18 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     LOG.info(s"Run active node cost ${System.currentTimeMillis() - start} ms")
   }
 
-  // build histogram for a node
   def buildHistogram(nid: Int): DenseFloatVector = {
+    LOG.info(s"------Build histogram of node[$nid]------")
+    val buildStart = System.currentTimeMillis()
+    val builder = new HistogramBuilder(this, param, trainDataStore, nid)
+    builder.build()
+    this.activeNodeStat(nid) -= 1
+    LOG.info(s"Build histogram cost ${System.currentTimeMillis() - buildStart} ms")
+    builder.getHistogram
+  }
+
+  // build histogram for a node
+  def buildHistogram2(nid: Int): DenseFloatVector = {
     LOG.info(s"------Build histogram of node[$nid]------")
     val buildStart = System.currentTimeMillis()
     // 1. allocate histogram
@@ -284,33 +297,47 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     val gradSum = this.forest(this.currentTree).stats.get(nid).sumGrad
     val hessSum = this.forest(this.currentTree).stats.get(nid).sumHess
     // 3. build histograms
-    for (i <- 0 until numSampleFeats) {
-      // 3.1. get info of current feature
-      val fid: Int = sampleFeats(i)
-      //val indices: Array[Int] = trainDataStore.getFeatRow(fid).getIndices
-      //val indices: Array[Int] = trainDataStore.getFeatIndices(fid)
-      //val bins: Array[Int] = trainDataStore.getFeatBins(fid)
-      val (indices, bins) = trainDataStore.getFeatureRow(fid)
-      val nnz: Int = indices.length
-      val gradOffset: Int = i * numSplit * 2
-      val hessOffset: Int = gradOffset + numSplit
-      var gradTaken: Float = 0
-      var hessTaken: Float = 0
-      // 3.2. loop non-zero instances, add to histogram, and record the gradients taken
-      for (j <- 0 until nnz) {
-        val insIdx: Int = indices(j)
-        if (this.insToNode(insIdx) == nid) {
-          val binIdx: Int = bins(j)
-          val gradIdx: Int = gradOffset + binIdx
-          val hessIdx: Int = hessOffset + binIdx
-          val gradPair: GradPair = gradPairs.get(insIdx)
-          histogram.set(gradIdx, histogram.get(gradIdx) + gradPair.getGrad)
-          histogram.set(hessIdx, histogram.get(hessIdx) + gradPair.getHess)
-          gradTaken += gradPair.getGrad
-          hessTaken += gradPair.getHess
+    var shortcut = false
+    if (nid != 0) {
+      val siblingNid = if (nid % 2 == 0) nid - 1 else nid + 1
+      if (this.histograms.get(this.currentTree).containsKey(siblingNid)) {
+        val siblingHist = this.histograms.get(this.currentTree).get(siblingNid)
+        val parentNid = (nid - 1) / 2
+        val parentHist = this.histograms.get(this.currentTree).get(parentNid)
+        for (i <- 0 until histogram.getDimension) {
+          histogram.set(i, parentHist.get(i) - siblingHist.get(i))
         }
+        shortcut = true
       }
-      /* // merge sorted array schema, but slow
+    }
+    if (!shortcut) {
+      for (i <- 0 until numSampleFeats) {
+        // 3.1. get info of current feature
+        val fid: Int = sampleFeats(i)
+        //val indices: Array[Int] = trainDataStore.getFeatRow(fid).getIndices
+        //val indices: Array[Int] = trainDataStore.getFeatIndices(fid)
+        //val bins: Array[Int] = trainDataStore.getFeatBins(fid)
+        val (indices, bins) = trainDataStore.getFeatureRow(fid)
+        val nnz: Int = indices.length
+        val gradOffset: Int = i * numSplit * 2
+        val hessOffset: Int = gradOffset + numSplit
+        var gradTaken: Float = 0
+        var hessTaken: Float = 0
+        // 3.2. loop non-zero instances, add to histogram, and record the gradients taken
+        for (j <- 0 until nnz) {
+          val insIdx: Int = indices(j)
+          if (this.insToNode(insIdx) == nid) {
+            val binIdx: Int = bins(j)
+            val gradIdx: Int = gradOffset + binIdx
+            val hessIdx: Int = hessOffset + binIdx
+            val gradPair: GradPair = gradPairs.get(insIdx)
+            histogram.set(gradIdx, histogram.get(gradIdx) + gradPair.getGrad)
+            histogram.set(hessIdx, histogram.get(hessIdx) + gradPair.getHess)
+            gradTaken += gradPair.getGrad
+            hessTaken += gradPair.getHess
+          }
+        }
+        /* // merge sorted array schema, but slow
       var iter1: Int = nodeStart
       var iter2: Int = 0
       while (iter1 <= nodeEnd && iter2 < nnz) {
@@ -332,7 +359,7 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
         else
           iter2 += 1
       }*/
-      /*// binary search schema, but slow
+        /*// binary search schema, but slow
       if (nodeEnd - nodeStart + 1 < nnz) {
         // loop over all instances on current node
         for (j <- nodeStart to nodeEnd) {
@@ -370,12 +397,13 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
           }
         }
       }*/
-      // 3.3. add remaining grad and hess to zero bin
-      val zeroIdx: Int = trainDataStore.getZeroBin(fid)
-      val gradIdx: Int = gradOffset + zeroIdx
-      val hessIdx: Int = hessOffset + zeroIdx
-      histogram.set(gradIdx, gradSum - gradTaken)
-      histogram.set(hessIdx, hessSum - hessTaken)
+        // 3.3. add remaining grad and hess to zero bin
+        val zeroIdx: Int = trainDataStore.getZeroBin(fid)
+        val gradIdx: Int = gradOffset + zeroIdx
+        val hessIdx: Int = hessOffset + zeroIdx
+        histogram.set(gradIdx, gradSum - gradTaken)
+        histogram.set(hessIdx, hessSum - hessTaken)
+      }
     }
     this.activeNodeStat(nid) -= 1
     LOG.info(s"Build histogram cost ${System.currentTimeMillis() - buildStart} ms")
@@ -499,9 +527,14 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     // 2. loop over features
     val sampleFeats: Array[Int] = this.fset.get(this.currentTree)
     val numSampleFeats: Int = sampleFeats.length
+    var histSizePerFeat: Int = param.numSplit * 2
+    if (param.numClass > 2) {
+      histSizePerFeat *= param.numClass
+    }
     for (i <- 0 until numSampleFeats) {
       val fid: Int = sampleFeats(i)
-      val offset: Int = i * param.numSplit * 2
+      //val offset: Int = i * param.numSplit * 2
+      val offset: Int = i * histSizePerFeat
       val curSplit: SplitEntry = findBestSplitOfOneFeature(fid, hist, offset, nodeStats)
       splitEntry.update(curSplit)
     }
@@ -511,8 +544,68 @@ class FPGBDTController(ctx: TaskContext, model: FPGBDTModel, param: FPGBDTParam,
     splitEntry
   }
 
-  // find the best split result of one feature
   def findBestSplitOfOneFeature(fid: Int, hist: DenseFloatVector,
+                                offset: Int, nodeStats: GradStats): SplitEntry = {
+    val splitEntry: SplitEntry = new SplitEntry()
+    var histSizePerFeat: Int = param.numSplit * 2
+    if (param.numClass > 2) {
+      histSizePerFeat *= param.numClass
+    }
+    if (offset + histSizePerFeat > hist.getDimension) {
+      LOG.error("index out of grad histogram size")
+      return splitEntry
+    }
+    // 1. set the feature id
+    splitEntry.setFid(fid)
+    // 2. create the best left stats and right stats
+    val bestLeftStats: GradStats = new GradStats()
+    val bestRightStats: GradStats = new GradStats()
+    // 3. calculate gain of node, create empty grad stats
+    val nodeGain: Float = nodeStats.calcGain(param)
+    val leftStats: GradStats = new GradStats()
+    val rightStats: GradStats = new GradStats()
+    // 4. loop over histogram and find the best
+    var numHistPerFeat: Int = 1
+    if (param.numClass > 2) {
+      numHistPerFeat = param.numClass
+    }
+    for (k <- 0 until numHistPerFeat) {
+      val curOffset: Int = offset + k * param.numSplit * 2
+      leftStats.setSumGrad(0)
+      leftStats.setSumHess(0)
+      rightStats.setSumGrad(0)
+      rightStats.setSumHess(0)
+      for (histIdx <- curOffset until (curOffset + param.numSplit - 1)) {
+        // 4.1. get grad and hess
+        val grad: Float = hist.get(histIdx)
+        val hess: Float = hist.get(histIdx + param.numSplit)
+        leftStats.add(grad, hess)
+        // 4.2. check whether we can split
+        if (leftStats.sumHess >= param.minChildWeight) {
+          // right = root - left
+          rightStats.setSubstract(nodeStats, leftStats)
+          if (rightStats.sumHess >= param.minChildWeight) {
+            // 4.3. calculate gain after current split
+            val lossChg: Float = leftStats.calcGain(param) +
+              rightStats.calcGain(param) - nodeGain
+            // 4.4. check whether we should update the split result
+            val splitIdx: Int = histIdx - curOffset + 1
+            if (splitEntry.update(lossChg, fid, trainDataStore.getSplit(fid, splitIdx))) {
+              bestLeftStats.update(leftStats.sumGrad, leftStats.sumHess)
+              bestRightStats.update(rightStats.sumGrad, rightStats.sumHess)
+            }
+          }
+        }
+      }
+    }
+    // 5. set best left and right grad stats
+    splitEntry.leftGradStat = bestLeftStats
+    splitEntry.rightGradStat = bestRightStats
+    splitEntry
+  }
+
+  // find the best split result of one feature
+  def findBestSplitOfOneFeature2(fid: Int, hist: DenseFloatVector,
                                 offset: Int, nodeStats: GradStats): SplitEntry = {
     val splitEntry: SplitEntry = new SplitEntry()
     if (offset + 2 * param.numSplit > hist.getDimension) {

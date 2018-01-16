@@ -99,6 +99,8 @@ object MLConf {
   // GBDT Params
   val ML_GBDT_CLASS_NUM = "ml.gbdt.class.num"
   val DEFAULT_ML_GBDT_CLASS_NUM = 2
+  val ML_GBDT_PARALLEL_MODE = "ml.gbdt.parallel.mode"
+  val DEFAULT_ML_GBDT_PARALLEL_MODE = "data"
   val ML_GBDT_TREE_NUM = "ml.gbdt.tree.num"
   val DEFAULT_ML_GBDT_TREE_NUM = 10
   val ML_GBDT_TREE_DEPTH = "ml.gbdt.tree.depth"

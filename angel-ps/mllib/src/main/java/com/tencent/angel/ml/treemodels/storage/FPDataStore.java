@@ -12,6 +12,7 @@ import com.tencent.angel.ml.math.vector.SparseDoubleSortedVector;
 import com.tencent.angel.ml.model.PSModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
 import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch;
+import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.param.TreeParam;
 import com.tencent.angel.worker.storage.DataBlock;
 import com.tencent.angel.worker.task.TaskContext;
@@ -41,10 +42,12 @@ public class FPDataStore extends DataStore {
         featLo = taskContext.getTaskIndex() * (param.numFeature / param.numWorker);
         featHi = taskContext.getTaskIndex() + 1 == param.numWorker
                 ? param.numFeature : featLo + param.numFeature / param.numWorker;
+        LOG.info(String.format("Worker[%d] feature range: [%d, %d), %d features in total",
+                taskContext.getTaskIndex(), featLo, featHi, param.numFeature));
     }
 
     @Override
-    public void init(DataBlock<LabeledData> dataStorage, GBDTModel model) throws Exception {
+    public void init(DataBlock<LabeledData> dataStorage, final GBDTModel model) throws Exception {
         long initStart = System.currentTimeMillis();
 
         LOG.info("Create feature parallel data meta, numFeature=" + numFeatures);
@@ -53,6 +56,8 @@ public class FPDataStore extends DataStore {
                 readDataAndCreateSketch(dataStorage, model);
         // 2. turn feature values into bin indexes
         findBins(features, nnzLocal, nnzGlobal, model);
+        // 3. ensure labels
+        ensureLabel(((GBDTParam) param).numClass);
 
 
         LOG.info(String.format("Create feature-parallel data meta cost %d ms, numInstance=%d",
@@ -60,7 +65,7 @@ public class FPDataStore extends DataStore {
     }
 
     private Tuple2<IntArrayList, FloatArrayList>[] readDataAndCreateSketch(
-            DataBlock<LabeledData> dataStorage, GBDTModel model) throws Exception {
+            DataBlock<LabeledData> dataStorage, final GBDTModel model) throws Exception {
         long readStart = System.currentTimeMillis();
         // 1. read data
         Tuple2<IntArrayList, FloatArrayList>[] features = new Tuple2[numFeatures];
@@ -116,10 +121,11 @@ public class FPDataStore extends DataStore {
                 insIdOffset += workerNumIns[workerId];
             }
         }
-        LOG.info(String.format("Worker[%d] instance id offset: %d, " +
-                "instance number of all workers: %s", taskContext.getTaskIndex(),
-                insIdOffset, Arrays.toString(workerNumIns)));
-        // 3. set info for each instance
+        LOG.info(String.format("Worker[%d] has %d instances, offset: %d, " +
+                "instance number of all workers: %s, %d instances in total",
+                taskContext.getTaskIndex(), numInstances, insIdOffset,
+                Arrays.toString(workerNumIns), globalNumIns));
+        // 3. set label for each instance
         DenseFloatVector labelsVec = new DenseFloatVector(globalNumIns);
         for (int insId = 0; insId < numInstances; insId++) {
             int trueId = insId + insIdOffset;
@@ -130,6 +136,8 @@ public class FPDataStore extends DataStore {
         labelsModel.increment(0, labelsVec);
         labelsModel.clock(true).get();
         labels = ((DenseFloatVector) labelsModel.getRow(0)).getValues();
+        numInstances = globalNumIns;
+
         // 4. create sketches
         createSketch(features, nnzLocal, nnzGlobal, model);
 
@@ -139,7 +147,7 @@ public class FPDataStore extends DataStore {
     }
 
     private void createSketch(Tuple2<IntArrayList, FloatArrayList>[] features,
-                              int[] nnzLocal, int[] nnzGlobal, GBDTModel model) throws Exception {
+                              int[] nnzLocal, int[] nnzGlobal, final GBDTModel model) throws Exception {
         long createStart = System.currentTimeMillis();
         // 1. create local quantile sketches
         HeapQuantileSketch[] sketches = new HeapQuantileSketch[numFeatures];
@@ -160,7 +168,7 @@ public class FPDataStore extends DataStore {
     }
 
     private void findBins(Tuple2<IntArrayList, FloatArrayList>[] features,
-                          int[] nnzLocal, int[] nnzGlobal, GBDTModel model) throws Exception {
+                          int[] nnzLocal, int[] nnzGlobal, final GBDTModel model) throws Exception {
         long startTime = System.currentTimeMillis();
 
         PSModel featRowModel = model.getPSModel(GBDTModel.FEAT_ROW_MAT());
@@ -175,8 +183,8 @@ public class FPDataStore extends DataStore {
             insIdOffset += workerNumIns[i];
         }
 
-        featIndices = new int[numFeature][];
-        featBins = new int[numFeature][];
+        featIndices = new int[featHi - featLo][];
+        featBins = new int[featHi - featLo][];
 
         int fid = 0;
         int batchSize = 1024;
@@ -185,6 +193,7 @@ public class FPDataStore extends DataStore {
         while (fid < numFeature) {
             if (fid + batchSize > numFeature) {
                 batchSize = numFeature - fid;
+                rowIndexes = new int[batchSize];
                 Arrays.setAll(rowIndexes, i -> i);
             }
             FeatureRowsUpdateParam<Byte> updateParam = new FeatureRowsUpdateParam<>(
@@ -223,12 +232,12 @@ public class FPDataStore extends DataStore {
                     int rowId = (Integer) entry.getKey();
                     int trueFid = rowId + start;
                     Tuple2<int[], int[]> featRow = entry.getValue();
-                    featIndices[trueFid] = featRow._1;
-                    featBins[trueFid] = featRow._2;
-                    if (featIndices[trueFid].length != nnzGlobal[trueFid]) {
+                    featIndices[trueFid - featLo] = featRow._1;
+                    featBins[trueFid - featLo] = featRow._2;
+                    if (featIndices[trueFid - featLo].length != nnzGlobal[trueFid]) {
                         throw new AngelException(String.format(
                                 "Missing values: feature[%d] has %d but got %d", trueFid,
-                                featIndices[trueFid].length, nnzGlobal[trueFid]));
+                                featIndices[trueFid - featLo].length, nnzGlobal[trueFid]));
                     }
                 }
             }
@@ -241,19 +250,11 @@ public class FPDataStore extends DataStore {
     }
 
     public int[] getFeatIndices(int fid) {
-        return featIndices[fid];
-    }
-
-    public int[][] getFeatIndices() {
-        return featIndices;
+        return featIndices[fid - featLo];
     }
 
     public int[] getFeatBins(int fid) {
-        return featBins[fid];
-    }
-
-    public int[][] getFeatBins() {
-        return featBins;
+        return featBins[fid - featLo];
     }
 
     public int getFeatLo() {

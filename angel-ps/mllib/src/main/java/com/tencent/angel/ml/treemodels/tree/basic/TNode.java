@@ -5,6 +5,7 @@ public abstract class TNode<NodeStat extends TNodeStat> {
     private final TNode parent;  // node id of parent in the tree, start with 0
     private TNode leftChild; // node id of left child in the tree
     private TNode rightChild; // node id of right child in the tree
+    private SplitEntry splitEntry;
     private boolean isLeaf;
 
     protected NodeStat[] nodeStats;  // stats of current node, each stats stands for a class
@@ -37,6 +38,22 @@ public abstract class TNode<NodeStat extends TNodeStat> {
         return this.rightChild;
     }
 
+    public SplitEntry getSplitEntry() {
+        return splitEntry;
+    }
+
+    public float getGain() {
+        return nodeStats[0].getGain();
+    }
+
+    public float[] getGains() {
+        float[] gains = new float[nodeStats.length];
+        for (int i = 0; i < nodeStats.length; i++) {
+            gains[i] = nodeStats[i].getGain();
+        }
+        return gains;
+    }
+
     public NodeStat getNodeStat() {
         return this.nodeStats[0];
     }
@@ -57,13 +74,37 @@ public abstract class TNode<NodeStat extends TNodeStat> {
         this.rightChild = rightChild;
     }
 
-    public void setNodeStat(NodeStat nodeStat) {
+    public void setSplitEntry(SplitEntry splitEntry) {
+        this.splitEntry = splitEntry;
+    }
+
+    public void setGain(float gain) {
+        this.nodeStats[0].setGain(gain);
+    }
+
+    public void setGains(float[] gains) {
+        for (int i = 0; i < this.nodeStats.length; i++) {
+            this.nodeStats[i].setGain(gains[i]);
+        }
+    }
+
+    public void setNodeWeight(float nodeWeight) {
+        this.nodeStats[0].setNodeWeight(nodeWeight);
+    }
+
+    public void setNodeWeights(float[] nodeWeights) {
+        for (int i = 0; i < this.nodeStats.length; i++) {
+            this.nodeStats[i].setNodeWeight(nodeWeights[i]);
+        }
+    }
+
+    /*public void setNodeStat(NodeStat nodeStat) {
         this.nodeStats[0] = nodeStat;
     }
 
     public void setNodeStat(int classId, NodeStat nodeStat) {
         this.nodeStats[classId] = nodeStat;
-    }
+    }*/
 
     public boolean isLeaf() {
         return this.isLeaf;
