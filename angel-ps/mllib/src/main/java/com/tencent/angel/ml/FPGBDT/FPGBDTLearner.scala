@@ -5,10 +5,11 @@ import java.util
 import com.tencent.angel.conf.AngelConf
 import com.tencent.angel.ml.FPGBDT.algo.{FPGBDTController, FPGBDTPhase}
 import com.tencent.angel.ml.FPGBDT.algo.storage.{TestDataStore, TrainDataStore}
-import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.{HeapQuantileSketch, SketchUtils}
+//import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.{HeapQuantileSketch, SketchUtils}
+import com.tencent.angel.ml.treemodels.sketch.{HeapQuantileSketch, SketchUtils}
 import com.tencent.angel.ml.FPGBDT.psf._
-import com.tencent.angel.ml.FPGBDT.psf.ClearUpdate.ClearUpdateParam
-import com.tencent.angel.ml.FPGBDT.psf.QSketchesMergeFunc.QSketchesMergeParam
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.ClearUpdate.ClearUpdateParam
+import com.tencent.angel.ml.treemodels.sketch.psf.QSketchesMergeFunc.QSketchesMergeParam
 import com.tencent.angel.ml.MLLearner
 import com.tencent.angel.ml.conf.MLConf
 import com.tencent.angel.ml.feature.LabeledData
@@ -18,6 +19,8 @@ import com.tencent.angel.ml.matrix.psf.update.enhance.VoidResult
 import com.tencent.angel.ml.metric.ErrorMetric
 import com.tencent.angel.ml.model.MLModel
 import com.tencent.angel.ml.param.FPGBDTParam
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf._
+import com.tencent.angel.ml.treemodels.sketch.psf.{QSketchesGetFunc, QSketchesGetResult, QSketchesMergeFunc}
 import com.tencent.angel.protobuf.generated.MLProtos.RowType
 import com.tencent.angel.psagent.matrix.MatrixClient
 import com.tencent.angel.worker.storage.DataBlock

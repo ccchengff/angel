@@ -98,14 +98,6 @@ public abstract class TNode<NodeStat extends TNodeStat> {
         }
     }
 
-    /*public void setNodeStat(NodeStat nodeStat) {
-        this.nodeStats[0] = nodeStat;
-    }
-
-    public void setNodeStat(int classId, NodeStat nodeStat) {
-        this.nodeStats[classId] = nodeStat;
-    }*/
-
     public boolean isLeaf() {
         return this.isLeaf;
     }

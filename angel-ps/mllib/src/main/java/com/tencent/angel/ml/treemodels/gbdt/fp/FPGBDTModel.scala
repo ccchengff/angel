@@ -1,11 +1,7 @@
 package com.tencent.angel.ml.treemodels.gbdt.fp
 
-import com.tencent.angel.conf.AngelConf
-import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.{HeapQuantileSketch, SketchUtils}
-import com.tencent.angel.ml.conf.MLConf
 import com.tencent.angel.ml.model.PSModel
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel
-import com.tencent.angel.ml.utils.Maths
 import com.tencent.angel.protobuf.generated.MLProtos.RowType
 import com.tencent.angel.worker.task.TaskContext
 import org.apache.commons.logging.{Log, LogFactory}

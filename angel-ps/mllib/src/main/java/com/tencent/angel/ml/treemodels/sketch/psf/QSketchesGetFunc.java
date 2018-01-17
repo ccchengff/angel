@@ -1,4 +1,4 @@
-package com.tencent.angel.ml.FPGBDT.psf;
+package com.tencent.angel.ml.treemodels.sketch.psf;
 
 import com.tencent.angel.PartitionKey;
 import com.tencent.angel.ml.matrix.psf.get.base.*;
@@ -15,9 +15,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Created by ccchengff on 2017/12/12.
- */
 public class QSketchesGetFunc extends GetFunc {
   public QSketchesGetFunc(QSketchesGetParam param) {
     super(param);

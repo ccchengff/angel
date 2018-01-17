@@ -1,8 +1,8 @@
-package com.tencent.angel.ml.FPGBDT.psf;
+package com.tencent.angel.ml.treemodels.sketch.psf;
 
 import com.tencent.angel.PartitionKey;
 import com.tencent.angel.exception.AngelException;
-import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch;
+import com.tencent.angel.ml.treemodels.sketch.HeapQuantileSketch;
 import com.tencent.angel.ml.matrix.psf.update.enhance.PartitionUpdateParam;
 import com.tencent.angel.ml.matrix.psf.update.enhance.UpdateFunc;
 import com.tencent.angel.ml.matrix.psf.update.enhance.UpdateParam;
@@ -21,9 +21,6 @@ import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Created by ccchengff on 2017/12/12.
- */
 public class QSketchesMergeFunc extends UpdateFunc {
   private static final Log LOG = LogFactory.getLog(QSketchesMergeFunc.class);
 

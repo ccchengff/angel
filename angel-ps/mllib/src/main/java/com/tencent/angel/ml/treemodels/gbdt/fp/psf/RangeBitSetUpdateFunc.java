@@ -1,7 +1,7 @@
-package com.tencent.angel.ml.FPGBDT.psf;
+package com.tencent.angel.ml.treemodels.gbdt.fp.psf;
 
 import com.tencent.angel.PartitionKey;
-import com.tencent.angel.ml.FPGBDT.algo.RangeBitSet;
+import com.tencent.angel.ml.treemodels.gbdt.fp.RangeBitSet;
 import com.tencent.angel.ml.matrix.psf.update.enhance.PartitionUpdateParam;
 import com.tencent.angel.ml.matrix.psf.update.enhance.UpdateFunc;
 import com.tencent.angel.ml.matrix.psf.update.enhance.UpdateParam;
@@ -14,13 +14,8 @@ import io.netty.buffer.ByteBuf;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
-
-/**
- * Created by ccchengff on 2017/11/23.
- */
 
 /**
  * Modify bitset (presented by an array of Integers) on PS

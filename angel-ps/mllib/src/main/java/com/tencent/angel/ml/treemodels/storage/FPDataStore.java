@@ -1,17 +1,17 @@
 package com.tencent.angel.ml.treemodels.storage;
 
 import com.tencent.angel.exception.AngelException;
-import com.tencent.angel.ml.FPGBDT.psf.FeatureRowsGetFunc;
-import com.tencent.angel.ml.FPGBDT.psf.FeatureRowsGetResult;
-import com.tencent.angel.ml.FPGBDT.psf.FeatureRowsUpdateFunc;
-import com.tencent.angel.ml.FPGBDT.psf.FeatureRowsUpdateParam;
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.FeatureRowsGetFunc;
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.FeatureRowsGetResult;
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.FeatureRowsUpdateFunc;
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.FeatureRowsUpdateParam;
 import com.tencent.angel.ml.feature.LabeledData;
 import com.tencent.angel.ml.math.vector.DenseFloatVector;
 import com.tencent.angel.ml.math.vector.DenseIntVector;
 import com.tencent.angel.ml.math.vector.SparseDoubleSortedVector;
 import com.tencent.angel.ml.model.PSModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
-import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch;
+import com.tencent.angel.ml.treemodels.sketch.HeapQuantileSketch;
 import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.param.TreeParam;
 import com.tencent.angel.worker.storage.DataBlock;

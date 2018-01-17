@@ -1,7 +1,7 @@
 package com.tencent.angel.ml.treemodels.gbdt
 
 import com.tencent.angel.conf.AngelConf
-import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.{HeapQuantileSketch, SketchUtils}
+import com.tencent.angel.ml.treemodels.sketch.{HeapQuantileSketch, SketchUtils}
 import com.tencent.angel.ml.conf.MLConf
 import com.tencent.angel.ml.feature.LabeledData
 import com.tencent.angel.ml.model.{MLModel, PSModel}

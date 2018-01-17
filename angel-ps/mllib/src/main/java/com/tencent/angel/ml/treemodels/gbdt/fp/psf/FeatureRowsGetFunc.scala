@@ -1,4 +1,4 @@
-package com.tencent.angel.ml.FPGBDT.psf
+package com.tencent.angel.ml.treemodels.gbdt.fp.psf
 
 import java.nio.ByteBuffer
 import java.util
@@ -11,9 +11,6 @@ import com.tencent.angel.psagent.PSAgentContext
 import io.netty.buffer.ByteBuf
 import org.apache.commons.logging.{Log, LogFactory}
 
-/**
-  * Created by ccchengff on 2017/12/16.
-  */
 class FeatureRowsGetFunc[@specialized(Byte, Short, Int) T <: scala.AnyVal](param: FeatureRowsGetParam[T]) extends GetFunc(param) {
   val LOG: Log = LogFactory.getLog(classOf[FeatureRowsGetFunc[T]])
 

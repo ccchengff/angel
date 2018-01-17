@@ -5,8 +5,9 @@ import java.util.concurrent.{ExecutorService, Executors}
 
 import com.tencent.angel.ml.FPGBDT.{FPGBDTLearner, FPGBDTModel}
 import com.tencent.angel.ml.FPGBDT.algo.storage.{TestDataStore, TrainDataStore}
-import com.tencent.angel.ml.FPGBDT.psf.{RangeBitSetGetRowFunc, RangeBitSetGetRowResult, RangeBitSetUpdateFunc}
-import com.tencent.angel.ml.FPGBDT.psf.RangeBitSetUpdateFunc.BitsUpdateParam
+//import com.tencent.angel.ml.FPGBDT.psf.{RangeBitSetGetRowResult, RangeBitSetUpdateFunc}
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.{RangeBitSetGetRowResult, RangeBitSetUpdateFunc}
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetUpdateFunc.BitsUpdateParam
 import com.tencent.angel.ml.GBDT.algo.RegTree.{GradPair, GradStats, RegTNodeStat, RegTree}
 import com.tencent.angel.ml.GBDT.algo.tree.{SplitEntry, TNode}
 import com.tencent.angel.ml.conf.MLConf
@@ -14,6 +15,8 @@ import com.tencent.angel.ml.math.vector._
 import com.tencent.angel.ml.metric.{GlobalMetrics, LogErrorMetric}
 import com.tencent.angel.ml.objective.{Loss, ObjFunc, RegLossObj}
 import com.tencent.angel.ml.param.FPGBDTParam
+import com.tencent.angel.ml.treemodels.gbdt.fp.RangeBitSet
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.{RangeBitSetGetRowFunc, RangeBitSetGetRowResult, RangeBitSetUpdateFunc}
 import com.tencent.angel.ml.utils.Maths
 import com.tencent.angel.worker.task.TaskContext
 import org.apache.commons.logging.LogFactory

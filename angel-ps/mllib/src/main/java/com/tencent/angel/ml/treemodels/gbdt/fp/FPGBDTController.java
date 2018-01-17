@@ -1,10 +1,9 @@
 package com.tencent.angel.ml.treemodels.gbdt.fp;
 
 import com.tencent.angel.exception.AngelException;
-import com.tencent.angel.ml.FPGBDT.algo.RangeBitSet;
-import com.tencent.angel.ml.FPGBDT.psf.RangeBitSetGetRowFunc;
-import com.tencent.angel.ml.FPGBDT.psf.RangeBitSetGetRowResult;
-import com.tencent.angel.ml.FPGBDT.psf.RangeBitSetUpdateFunc;
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowFunc;
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowResult;
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetUpdateFunc;
 import com.tencent.angel.ml.math.vector.DenseFloatVector;
 import com.tencent.angel.ml.math.vector.DenseIntVector;
 import com.tencent.angel.ml.math.vector.SparseFloatVector;
@@ -13,11 +12,9 @@ import com.tencent.angel.ml.model.PSModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTController;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTPhase;
-import com.tencent.angel.ml.treemodels.gbdt.ParallelMode;
 import com.tencent.angel.ml.treemodels.gbdt.histogram.Histogram;
 import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.storage.DPDataStore;
-import com.tencent.angel.ml.treemodels.storage.DataStore;
 import com.tencent.angel.ml.treemodels.storage.FPDataStore;
 import com.tencent.angel.ml.treemodels.tree.basic.SplitEntry;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNode;
@@ -27,7 +24,6 @@ import com.tencent.angel.worker.task.TaskContext;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import scala.Tuple1;
 
 import java.util.Arrays;
 import java.util.Random;

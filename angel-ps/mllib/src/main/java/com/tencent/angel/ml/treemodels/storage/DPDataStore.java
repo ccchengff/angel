@@ -6,7 +6,7 @@ import com.tencent.angel.ml.math.vector.DenseIntVector;
 import com.tencent.angel.ml.math.vector.SparseDoubleSortedVector;
 import com.tencent.angel.ml.model.PSModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
-import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch;
+import com.tencent.angel.ml.treemodels.sketch.HeapQuantileSketch;
 import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.param.RegTParam;
 import com.tencent.angel.ml.treemodels.param.TreeParam;

@@ -1,4 +1,4 @@
-package com.tencent.angel.ml.FPGBDT.algo;
+package com.tencent.angel.ml.treemodels.gbdt.fp;
 
 import com.tencent.angel.common.Serialize;
 import io.netty.buffer.ByteBuf;
@@ -6,10 +6,6 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 import java.util.List;
-
-/**
- * Created by ccchengff on 2017/11/20.
- */
 
 /**
  * Efficient bit set for a given range [from, to]

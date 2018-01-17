@@ -2,11 +2,9 @@ package com.tencent.angel.ml.treemodels.gbdt.dp;
 
 import com.tencent.angel.ml.treemodels.gbdt.GBDTController;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
-import com.tencent.angel.ml.treemodels.gbdt.ParallelMode;
 import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.storage.DPDataStore;
 import com.tencent.angel.worker.task.TaskContext;
-import scala.Tuple1;
 
 public class DPGBDTController extends GBDTController<DPDataStore> {
     private int[] nodeStats;  // used for multi-batch histogram building

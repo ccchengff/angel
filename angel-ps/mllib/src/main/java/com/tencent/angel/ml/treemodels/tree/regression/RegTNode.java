@@ -6,7 +6,6 @@ import com.tencent.angel.ml.treemodels.tree.basic.TNode;
 
 
 public class RegTNode extends TNode<RegTNodeStat> {
-    //private SplitEntry splitEntry;  // split entry of current node
 
     public RegTNode(int nid, TNode parent, int numClass) {
         this(nid, parent, null, null, numClass);
@@ -43,13 +42,4 @@ public class RegTNode extends TNode<RegTNodeStat> {
         return nodeGains;
     }
 
-    /*
-    public SplitEntry getSplitEntry() {
-        return this.splitEntry;
-    }
-
-    public void setSplitEntry(SplitEntry splitEntry) {
-        this.splitEntry = splitEntry;
-    }
-    */
 }

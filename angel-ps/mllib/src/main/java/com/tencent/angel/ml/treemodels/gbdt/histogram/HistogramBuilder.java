@@ -9,8 +9,6 @@ import com.tencent.angel.ml.treemodels.gbdt.dp.DPGBDTController;
 import com.tencent.angel.ml.treemodels.gbdt.fp.FPGBDTController;
 import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.storage.FPDataStore;
-import com.tencent.angel.ml.treemodels.tree.regression.GradPair;
-import com.tencent.angel.ml.treemodels.tree.regression.RegTNode;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNodeStat;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;

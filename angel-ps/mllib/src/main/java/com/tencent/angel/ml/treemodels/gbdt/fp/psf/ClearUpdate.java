@@ -1,4 +1,4 @@
-package com.tencent.angel.ml.FPGBDT.psf;
+package com.tencent.angel.ml.treemodels.gbdt.fp.psf;
 
 import com.tencent.angel.PartitionKey;
 import com.tencent.angel.ml.matrix.psf.update.enhance.PartitionUpdateParam;
@@ -13,11 +13,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Created by ccchengff on 2017/11/16.
- */
-
-/**
- * Clear elements
+ * Clear elements on Parameter-Server matrix
  */
 public class ClearUpdate extends UpdateFunc {
 

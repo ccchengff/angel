@@ -10,7 +10,7 @@ import com.tencent.angel.ml.model.MLModel
 import com.tencent.angel.ml.treemodels.gbdt.dp.{DPGBDTController, DPGBDTModel}
 import com.tencent.angel.ml.treemodels.gbdt.fp.{FPGBDTController, FPGBDTModel}
 import com.tencent.angel.ml.treemodels.param.GBDTParam
-import com.tencent.angel.ml.treemodels.storage.{DPDataStore, DataStore, FPDataStore}
+import com.tencent.angel.ml.treemodels.storage.{DPDataStore, FPDataStore}
 import com.tencent.angel.ml.utils.Maths
 import com.tencent.angel.worker.storage.DataBlock
 import com.tencent.angel.worker.task.TaskContext

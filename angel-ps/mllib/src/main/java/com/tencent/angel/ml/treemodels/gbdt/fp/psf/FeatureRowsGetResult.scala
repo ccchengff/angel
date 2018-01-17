@@ -1,13 +1,10 @@
-package com.tencent.angel.ml.FPGBDT.psf
+package com.tencent.angel.ml.treemodels.gbdt.fp.psf
 
-import com.tencent.angel.ml.matrix.psf.get.base.{GetResult, PartitionGetResult}
 import java.util
 
+import com.tencent.angel.ml.matrix.psf.get.base.{GetResult, PartitionGetResult}
 import io.netty.buffer.ByteBuf
 
-/**
-  * Created by ccchengff on 2017/12/16.
-  */
 class FeatureRowsGetResult(featureRows: util.Map[Int, (Array[Int], Array[Int])]) extends GetResult{
   def getFeatureRows = featureRows
 }

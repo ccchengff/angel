@@ -1,4 +1,4 @@
-package com.tencent.angel.ml.FPGBDT.psf;
+package com.tencent.angel.ml.treemodels.sketch.psf;
 
 import com.tencent.angel.ml.matrix.psf.get.base.GetResult;
 import com.tencent.angel.ml.matrix.psf.get.base.PartitionGetResult;
@@ -7,9 +7,6 @@ import io.netty.buffer.ByteBuf;
 
 import java.util.Map;
 
-/**
- * Created by ccchengff on 2017/12/12.
- */
 public class QSketchesGetResult extends GetResult {
   private Map<Integer, float[]> quantiles;
 

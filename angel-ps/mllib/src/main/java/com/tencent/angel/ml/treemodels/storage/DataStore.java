@@ -1,19 +1,18 @@
 package com.tencent.angel.ml.treemodels.storage;
 
 import com.tencent.angel.exception.AngelException;
-import com.tencent.angel.ml.FPGBDT.psf.QSketchesGetResult;
-import com.tencent.angel.ml.FPGBDT.psf.QSketchesGetFunc;
-import com.tencent.angel.ml.FPGBDT.psf.QSketchesMergeFunc;
+import com.tencent.angel.ml.treemodels.sketch.psf.QSketchesGetResult;
+import com.tencent.angel.ml.treemodels.sketch.psf.QSketchesGetFunc;
+import com.tencent.angel.ml.treemodels.sketch.psf.QSketchesMergeFunc;
 import com.tencent.angel.ml.feature.LabeledData;
 import com.tencent.angel.ml.model.PSModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
 import com.tencent.angel.ml.treemodels.param.TreeParam;
-import com.tencent.angel.ml.FPGBDT.algo.QuantileSketch.HeapQuantileSketch;
+import com.tencent.angel.ml.treemodels.sketch.HeapQuantileSketch;
 import com.tencent.angel.worker.storage.DataBlock;
 import com.tencent.angel.worker.task.TaskContext;
 
 import java.util.Arrays;
-import java.util.Set;
 
 public abstract class DataStore {
     protected final TaskContext taskContext;
@@ -187,6 +186,7 @@ public abstract class DataStore {
      */
     protected float[][] mergeSketchAndPullQuantiles(HeapQuantileSketch[] sketches, int[] estimateNs,
                                                     final GBDTModel model) throws Exception {
+        int batchSize = 1024;
         PSModel sketchModel = model.getPSModel(GBDTModel.SKETCH_MAT());
         int matrixId = sketchModel.getMatrixId();
 
@@ -197,7 +197,6 @@ public abstract class DataStore {
         float[][] quantiles = new float[numFeature][numSplit];
 
         int fid = 0;
-        int batchSize = 1024;
         int[] rowIndexes = new int[batchSize];
         Arrays.setAll(rowIndexes, i -> i);
         HeapQuantileSketch[] batchSketches = new HeapQuantileSketch[batchSize];

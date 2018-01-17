@@ -1,14 +1,11 @@
-package com.tencent.angel.ml.FPGBDT.psf;
+package com.tencent.angel.ml.treemodels.gbdt.fp.psf;
 
-import com.tencent.angel.ml.FPGBDT.algo.RangeBitSet;
+import com.tencent.angel.ml.treemodels.gbdt.fp.RangeBitSet;
 import com.tencent.angel.ml.matrix.psf.get.base.GetResult;
 import com.tencent.angel.ml.matrix.psf.get.base.PartitionGetResult;
 import com.tencent.angel.psagent.matrix.ResponseType;
 import io.netty.buffer.ByteBuf;
 
-/**
- * Created by ccchengff on 2017/11/25.
- */
 public class RangeBitSetGetRowResult extends GetResult {
   private RangeBitSet bitset;
 

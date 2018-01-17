@@ -1,17 +1,11 @@
 package com.tencent.angel.ml.treemodels.gbdt;
 
-import com.tencent.angel.ml.FPGBDT.psf.ClearUpdate;
-import com.tencent.angel.ml.conf.MLConf;
+import com.tencent.angel.ml.treemodels.gbdt.fp.psf.ClearUpdate;
 import com.tencent.angel.ml.math.vector.DenseFloatVector;
 import com.tencent.angel.ml.metric.EvalMetric;
-import com.tencent.angel.ml.metric.GlobalMetrics;
-import com.tencent.angel.ml.metric.LogErrorMetric;
-import com.tencent.angel.ml.metric.MultiErrorMetric;
 import com.tencent.angel.ml.model.PSModel;
 import com.tencent.angel.ml.objective.Loss;
 import com.tencent.angel.ml.objective.ObjFunc;
-import com.tencent.angel.ml.objective.RegLossObj;
-import com.tencent.angel.ml.objective.SoftmaxMultiClassObj;
 import com.tencent.angel.ml.treemodels.gbdt.histogram.Histogram;
 import com.tencent.angel.ml.treemodels.gbdt.histogram.HistogramBuilder;
 import com.tencent.angel.ml.treemodels.gbdt.histogram.SplitFinder;
@@ -22,16 +16,11 @@ import com.tencent.angel.ml.treemodels.tree.regression.GradPair;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNode;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNodeStat;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTree;
-import com.tencent.angel.ml.utils.Maths;
-import com.tencent.angel.utils.StringUtils;
 import com.tencent.angel.worker.task.TaskContext;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import scala.Tuple1;
 
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 public abstract class GBDTController<TrainDataStore extends DataStore> {
