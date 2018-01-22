@@ -10,7 +10,7 @@ import org.apache.commons.logging.{Log, LogFactory}
 import org.apache.hadoop.conf.Configuration
 
 class GBDTRunner extends MLRunner {
-  private var LOG: Log = LogFactory.getLog(classOf[GBDTRunner])
+  private val LOG: Log = LogFactory.getLog(classOf[GBDTRunner])
 
   /**
     * Training job to obtain a model
