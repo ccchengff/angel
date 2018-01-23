@@ -11,6 +11,8 @@ import com.tencent.angel.ml.treemodels.gbdt.GBDTController;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTPhase;
 import com.tencent.angel.ml.treemodels.gbdt.dp.psf.HistAggrFunc;
+import com.tencent.angel.ml.treemodels.gbdt.dp.psf.HistGetSplitFunc;
+import com.tencent.angel.ml.treemodels.gbdt.dp.psf.HistGetSplitResult;
 import com.tencent.angel.ml.treemodels.gbdt.fp.RangeBitSet;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowFunc;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowResult;
@@ -19,6 +21,7 @@ import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.storage.DPDataStore;
 import com.tencent.angel.ml.treemodels.tree.basic.SplitEntry;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNode;
+import com.tencent.angel.ml.treemodels.tree.regression.RegTNodeStat;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTree;
 import com.tencent.angel.ml.utils.Maths;
 import com.tencent.angel.worker.task.TaskContext;
@@ -31,7 +34,7 @@ import java.util.*;
 public class DPGBDTController extends GBDTController<DPDataStore> {
     private static final Log LOG = LogFactory.getLog(DPGBDTController.class);
 
-    //private int[] nodeStats;  // used for multi-batch histogram building
+    private boolean isServerSplit;
 
     public DPGBDTController(TaskContext taskContext, String parallelMode,
                             GBDTParam param, GBDTModel model,
@@ -42,7 +45,8 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
     @Override
     public void init() {
         super.init();
-        //this.nodeStats = new int[param.maxNodeNum];
+        isServerSplit = taskContext.getConf().getBoolean(
+                MLConf.ML_GBDT_SERVER_SPLIT(), MLConf.DEFAULT_ML_GBDT_SERVER_SPLIT());
     }
 
     @Override
@@ -189,6 +193,13 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
             needFlushMatrices.add(histName);
         }
         clockAllMatrix(needFlushMatrices, true);
+        if (isServerSplit || bytesPerItem == 4) {
+            // if isServerSplit, we must make sure all histogram
+            // are updated before servers start to find split;
+            // else if using low precision update, we must make sure
+            // all histogram are updated before they are accessed
+            model.sync();
+        }
         LOG.info(String.format("Aggregate histogram cost %d ms",
                 System.currentTimeMillis() - aggrStart));
 
@@ -212,15 +223,13 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
                 looper = 0;
             }
         }
-        LOG.info(String.format("Task[%d] responsible tree node: %s",
+        LOG.info(String.format("Worker[%d] responsible tree node(s): %s",
                 taskContext.getTaskId().getIndex(), responsibleNid.toString()));
         // 2. allocate
         SparseIntVector splitFidVec = new SparseIntVector(param.maxNodeNum);
         SparseFloatVector splitFvalueVec = new SparseFloatVector(param.maxNodeNum);
         SparseFloatVector splitGainVec = new SparseFloatVector(param.maxNodeNum);
         // 3. find split
-        boolean isServerSplit = taskContext.getConf().getBoolean(
-                MLConf.ML_GBDT_SERVER_SPLIT(), MLConf.DEFAULT_ML_GBDT_SERVER_SPLIT());
         for (int i = 0; i < responsibleNid.size(); i++) {
             int nid = responsibleNid.get(i);
             SplitEntry bestSplit = null;
@@ -228,6 +237,18 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
             if (isServerSplit) {
                 // 3.1.a. find best split on PS
                 int matrixId = histMat.getMatrixId();
+                RegTNode node = forest[currentTree].getNode(nid);
+                node.calcGain(param);
+                RegTNodeStat[] nodeStats = node.getNodeStats();
+                bestSplit = ((HistGetSplitResult) histMat.get(new HistGetSplitFunc(
+                        matrixId, 0, nodeStats, param))).getSplitEntry();
+                if (bestSplit.getFid() != -1) {
+                    int trueSplitFid = fset[bestSplit.getFid()];
+                    int splitId = (int) bestSplit.getFvalue();
+                    float trueSplitFvalue = trainDataStore.getSplit(trueSplitFid, splitId);
+                    bestSplit.setFid(trueSplitFid);
+                    bestSplit.setFvalue(trueSplitFvalue);
+                }
             } else {
                 // 3.1.b. pull histogram and find split
                 DenseFloatVector flattenHist = (DenseFloatVector) histMat.getRow(0);
@@ -262,7 +283,7 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
         needFlushMatrices.add(GBDTModel.SPLIT_GAIN_MAT());
         // 4.4. node grad stat
         needFlushMatrices.add(GBDTModel.NODE_GRAD_MAT());
-        // 4.5. flush & clock
+        // 4.5. clock
         clockAllMatrix(needFlushMatrices, true);
         // 5. finish current phase
         LOG.info(String.format("Find split cost: %d ms",

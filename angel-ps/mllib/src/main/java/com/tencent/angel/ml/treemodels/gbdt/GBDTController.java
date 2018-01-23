@@ -165,7 +165,12 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
                 readyNodes.remove(nid);
                 setNodeToLeaf(nid);
             } else {
-                if (nodePosEnd[nid] - nodePosStart[nid] + 1 < 100) {
+                RegTNodeStat[] nodeStats = forest[currentTree].getNode(nid).getNodeStats();
+                float maxWeight = Float.MIN_VALUE;
+                for (RegTNodeStat nodeStat : nodeStats) {
+                    maxWeight = Math.max(maxWeight, nodeStat.getSumHess());
+                }
+                if (maxWeight < param.minChildWeight * 2) {
                     readyNodes.remove(nid);
                     setNodeToLeaf(nid);
                 } else {

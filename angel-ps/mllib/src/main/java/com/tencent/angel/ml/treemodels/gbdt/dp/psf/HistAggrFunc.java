@@ -64,8 +64,7 @@ public class HistAggrFunc extends UpdateFunc {
       }
       return partParams;
     }
-
-      }
+  }
 
   public static class HistAggrPartitionParam extends PartitionUpdateParam {
     private int rowId;
@@ -96,15 +95,15 @@ public class HistAggrFunc extends UpdateFunc {
       buf.writeInt(end - start);
       buf.writeInt(bitsPerItem);
       // find the max abs
-      float maxAbs = 0.0f;
+      double maxAbs = 0.0f;
       for (int i = start; i < end; i++) {
-        maxAbs = Math.max(maxAbs, Math.abs(array[i]));
+        maxAbs = Math.max(maxAbs, (double) Math.abs(array[i]));
       }
-      buf.writeFloat(maxAbs);
+      buf.writeDouble(maxAbs);
       // compress data
       long maxPoint = (long) Math.pow(2, bitsPerItem - 1) - 1;
       for (int i = start; i < end; i++) {
-        float value = array[i];
+        double value = array[i];
         long point = (long) Math.floor(Math.abs(value) / maxAbs * maxPoint);
         if (value > 1e-10 && point < Integer.MAX_VALUE) {
           point += (point < maxPoint && Math.random() > 0.5) ? 1 : 0;  // add Bernoulli random variable
@@ -120,16 +119,21 @@ public class HistAggrFunc extends UpdateFunc {
       rowId = buf.readInt();
       int length = buf.readInt();
       bitsPerItem = buf.readInt();
-      float maxAbs = buf.readFloat();
+      double maxAbs = buf.readDouble();
       long maxPoint = (long) Math.pow(2, bitsPerItem - 1) - 1;
       byte[] itemBytes = new byte[bitsPerItem / 8];
       slice = new float[length];
       for (int i = 0; i < length; i++) {
         buf.readBytes(itemBytes);
         long point = byte2long(itemBytes);
-        float parsedValue = (float) point / (float) maxPoint * maxAbs;
-        array[i] = parsedValue;
+        double parsedValue = (double) point / (double) maxPoint * maxAbs;
+        slice[i] = (float) parsedValue;
       }
+    }
+
+    @Override
+    public int bufferLen() {
+      return super.bufferLen() + 20 + (end - start) * bitsPerItem / 8;
     }
 
     public static byte[] long2Byte(long value, int size, boolean isNeg) {
@@ -143,11 +147,6 @@ public class HistAggrFunc extends UpdateFunc {
         rec[0] |= 0x80;
       }
       return rec;
-    }
-
-    @Override
-    public int bufferLen() {
-      return super.bufferLen() + 20 + (end - start) * bitsPerItem / 8;
     }
 
     public static long byte2long(byte[] buffer){

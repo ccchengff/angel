@@ -112,16 +112,11 @@ public class HistogramBuilder {
             } else {
                 throw new AngelException("Multi-class not implemented");
             }
-            synchronized (this) {
-                LOG.info(String.format("Thread[%d] incoming", threadId));
+            synchronized (BuilderThread.class) {
                 if (histogram.getHistogram(0) == null) {
-                    LOG.info(String.format("Thread[%d] allocating", threadId));
                     histogram.alloc();
-                    LOG.info(String.format("Thread[%d] finished allocating", threadId));
                 }
-                LOG.info(String.format("Thread[%d] adding", threadId));
                 histogram.plusBy(selfHist);
-                LOG.info(String.format("Thread[%d] finished adding", threadId));
             }
         }
 
