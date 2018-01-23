@@ -129,6 +129,7 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
             if (taskContext.getTaskIndex() == 0) {
                 updateNodeStat(0, sumGrad, sumHess);
             }
+            LOG.info(String.format("Root sumGrad[%f], sumHess[%f]", sumGrad, sumHess));
         } else {
             float[] sumGrad = new float[param.numClass];
             float[] sumHess = new float[param.numClass];
@@ -141,6 +142,8 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
             if (taskContext.getTaskIndex() == 0) {
                 updateNodeStats(0, sumGrad, sumHess);
             }
+            LOG.info(String.format("Root sumGrad%s, sumHess%s",
+                Arrays.toString(sumGrad), Arrays.toString(sumHess)));
         }
         model.getPSModel(GBDTModel.NODE_GRAD_MAT()).clock(true).get();
         LOG.info(String.format("Calc grad pair cost %d ms", System.currentTimeMillis() - startTime));

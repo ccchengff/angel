@@ -40,8 +40,8 @@ class DPGBDTModel(conf: Configuration, _ctx: TaskContext = null) extends GBDTMod
       size *= numClass
     }
     val histMat = PSModel(GBDTModel.GRAD_HIST_MAT_PREFIX + nid, 1, size, 1, size / numPS)
-      .setRowType(RowType.T_DOUBLE_DENSE)
-      .setOplogType("DENSE_DOUBLE")
+      .setRowType(RowType.T_FLOAT_DENSE)
+      .setOplogType("DENSE_FLOAT")
       .setNeedSave(false)
     addPSModel(GBDTModel.GRAD_HIST_MAT_PREFIX + nid, histMat)
     histMats(nid) = histMat

@@ -25,16 +25,15 @@ public class SplitFinder {
     }
 
 
-    public SplitEntry findBestSplit(Histogram histogram, RegTNode node,
-                                int[] fset) {
+    public SplitEntry findBestSplit(Histogram histogram, RegTNode node, int[] fset) {
         LOG.info(String.format("------To find the best split of node[%d]------",
                 node.getNid()));
         SplitEntry splitEntry = new SplitEntry();
         node.calcGain(param);
         for (int i = 0; i < fset.length; i++) {
             int fid = fset[i];
-            SplitEntry curSplit = findBestSplitOfOneFeature(fid,
-                    histogram.getHistogram(i), node);
+            SplitEntry curSplit = findBestSplitOfOneFeature(fid, histogram.getHistogram(i),
+              0, param.numClass, param.numSplit, node);
             splitEntry.update(curSplit);
         }
         LOG.info(String.format("Local best split of node[%d]: fid[%d], " +
@@ -43,8 +42,27 @@ public class SplitFinder {
         return splitEntry;
     }
 
-    private SplitEntry findBestSplitOfOneFeature(int fid, DenseFloatVector hist,
-                                                 RegTNode node) {
+    public SplitEntry findBestSplit(DenseFloatVector flattenHist, RegTNode node, int[] fset) {
+        LOG.info(String.format("------To find the best split of node[%d]------",
+          node.getNid()));
+        SplitEntry splitEntry = new SplitEntry();
+        node.calcGain(param);
+        int sizePerFeat = param.numSplit * 2 * (param.numClass == 2 ? 1 : param.numClass);
+        assert flattenHist.getDimension() == sizePerFeat * fset.length;
+        for (int i = 0, offset = 0; i < fset.length; i++, offset += sizePerFeat) {
+            int fid = fset[i];
+            SplitEntry curSplit = findBestSplitOfOneFeature(fid, flattenHist,
+              offset, param.numClass, param.numSplit, node);
+            splitEntry.update(curSplit);
+        }
+        LOG.info(String.format("Best split of node[%d]: fid[%d], " +
+            "fvalue[%f], loss gain[%f]", node.getNid(), splitEntry.getFid(),
+          splitEntry.getFvalue(), splitEntry.getLossChg()));
+        return splitEntry;
+    }
+
+    private SplitEntry findBestSplitOfOneFeature(int fid, DenseFloatVector hist, int histOffset,
+                                                 int numClass, int numSplit, RegTNode node) {
         SplitEntry splitEntry = new SplitEntry();
         // 1. set feature id
         splitEntry.setFid(fid);
@@ -55,9 +73,9 @@ public class SplitFinder {
         GradPair leftStat = new GradPair();
         GradPair rightStat = new GradPair();
         // 4. loop over histogram and find the best
-        int numHist = param.numClass == 2 ? 1 : param.numClass;
+        int numHist = numClass == 2 ? 1 : numClass;
         for (int k = 0; k < numHist; k++) {
-            int offset = k * param.numSplit * 2;
+            int offset = histOffset + k * numSplit * 2;
             // 4.1. reset grad stats
             leftStat.update(0, 0);
             rightStat.update(0, 0);
@@ -67,7 +85,7 @@ public class SplitFinder {
             float sumGrad = nodeStat.getSumGrad();
             float sumHess = nodeStat.getSumHess();
             // 4.3. loop over split positions, find the best split of current feature
-            for (int splitPos = offset; splitPos < offset + param.numSplit - 1; splitPos++) {
+            for (int splitPos = offset; splitPos < offset + numSplit - 1; splitPos++) {
                 // 4.3.1. get grad and hess
                 float grad = hist.get(splitPos);
                 float hess = hist.get(splitPos + param.numSplit);

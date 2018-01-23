@@ -10,6 +10,7 @@ import com.tencent.angel.ml.objective.Loss;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTController;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTPhase;
+import com.tencent.angel.ml.treemodels.gbdt.dp.psf.HistAggrFunc;
 import com.tencent.angel.ml.treemodels.gbdt.fp.RangeBitSet;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowFunc;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowResult;
@@ -77,17 +78,11 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
             if (taskContext.getTaskIndex() == 0) {
                 // numFeatSample should be adjusted to number of PS
                 int numFeatSample = ((DPGBDTModel) model).numFeatSample();
-                fset = new int[numFeatSample];
-                int cnt = 0;
-                Random random = new Random();
-                for (int fid = 0; fid < param.numFeature; fid++) {
-                    if (random.nextFloat() <= param.featSampleRatio) {
-                        fset[cnt++] = fid;
-                        if (cnt >= numFeatSample) {
-                            break; // TODO: be fair!!!
-                        }
-                    }
-                }
+                int[] findex = new int[param.numFeature];
+                Arrays.setAll(findex, i -> i);
+                Maths.shuffle(findex);
+               fset = Arrays.copyOf(findex, numFeatSample);
+                Arrays.sort(fset);
                 DenseIntVector featVec = new DenseIntVector(fset.length, fset);
                 featSample.increment(currentTree, featVec);
             }
@@ -135,6 +130,7 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
             sumGrad = nodeStatsVec.get(0);
             sumHess = nodeStatsVec.get(param.maxNodeNum);
             forest[currentTree].getRoot().setGradStats(sumGrad, sumHess);
+            LOG.info(String.format("Root sumGrad[%f], sumHess[%f]", sumGrad, sumHess));
         } else {
             float[] sumGrad = new float[param.numClass];
             float[] sumHess = new float[param.numClass];
@@ -152,6 +148,8 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
                 sumHess[i] = nodeStatsVec.get(param.maxNodeNum * param.numClass + i);
             }
             forest[currentTree].getRoot().setGradStats(sumGrad, sumHess);
+            LOG.info(String.format("Root sumGrad%s, sumHess%s",
+              Arrays.toString(sumGrad), Arrays.toString(sumHess)));
         }
         LOG.info(String.format("Calc grad pair cost %d ms", System.currentTimeMillis() - startTime));
     }
@@ -169,18 +167,28 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
                 System.currentTimeMillis() - buildStart));
 
         // compression update
+        Set<String> needFlushMatrices = new HashSet<>(activeNodes.size());
         long aggrStart = System.currentTimeMillis();
         int bytesPerItem = taskContext.getConf().getInt(
-                MLConf.ML_COMPRESS_BYTES(), MLConf.DEFAULT_ML_COMPRESS_BYTES());
-        if (bytesPerItem < 1 || bytesPerItem > 8 ) {
-            LOG.info("Invalid compress configuration: " + bytesPerItem + ", it should be [1,8].");
-            bytesPerItem = MLConf.DEFAULT_ML_COMPRESS_BYTES();
+                MLConf.ML_COMPRESS_BYTES(), 4);
+        if (bytesPerItem < 1 || bytesPerItem > 4 ) {
+            LOG.info("Invalid compress configuration: " + bytesPerItem + ", it should be [1, 4].");
+            bytesPerItem = 4;
         }
         for (int nid : activeNodes) {
-            PSModel histMat = model.getPSModel(GBDTModel.GRAD_HIST_MAT_PREFIX() + nid);
+            String histName = GBDTModel.GRAD_HIST_MAT_PREFIX() + nid;
+            PSModel histMat = model.getPSModel(histName);
             Histogram hist = histograms.get(nid);
-
+            if (bytesPerItem == 4) {
+                histMat.increment(0, hist.flatten());
+            } else {
+                // TODO: use Histogram in psf directly instead of flatten it
+                histMat.update(new HistAggrFunc(histMat.getMatrixId(), false,
+                  0, hist.flatten(), bytesPerItem * 8));
+            }
+            needFlushMatrices.add(histName);
         }
+        clockAllMatrix(needFlushMatrices, true);
         LOG.info(String.format("Aggregate histogram cost %d ms",
                 System.currentTimeMillis() - aggrStart));
 
@@ -216,48 +224,34 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
         for (int i = 0; i < responsibleNid.size(); i++) {
             int nid = responsibleNid.get(i);
             SplitEntry bestSplit = null;
-            // 3.1. check whether the histogram is built from subtraction
-            // if yes, we can find the best split locally since the histogram is complete
-            boolean isSubtract = false;
-            /*if (nid != 0) {
-                int siblingNid = (nid & 1) == 0 ? nid - 1 : nid + 1;
-                Histogram siblingHist = histograms.get(siblingNid);
-                if (siblingHist != null && !activeNodes.contains(siblingNid)) {
-                    isSubtract = true;
-                    // 3.2. find best split
-                    Histogram histogram = histograms.get(nid);
-                    RegTNode node = forest[currentTree].getNode(nid);
-                    bestSplit = splitFinder.findBestSplit(histogram, node, fset);
-
-                }
-            }*/
-            // if no, we must communicate with PS
-            if (!isSubtract) {
-                PSModel histMat = model.getPSModel(GBDTModel.GRAD_HIST_MAT_PREFIX() + nid);
-                if (isServerSplit) {
-                    // find best split on PS
-                    int matrixId = histMat.getMatrixId();
-                } else {
-                    // pull histogram and find split
-
-                }
+            PSModel histMat = model.getPSModel(GBDTModel.GRAD_HIST_MAT_PREFIX() + nid);
+            if (isServerSplit) {
+                // 3.1.a. find best split on PS
+                int matrixId = histMat.getMatrixId();
+            } else {
+                // 3.1.b. pull histogram and find split
+                DenseFloatVector flattenHist = (DenseFloatVector) histMat.getRow(0);
+                RegTNode node = forest[currentTree].getNode(nid);
+                bestSplit = splitFinder.findBestSplit(flattenHist, node, fset);
             }
-
+            // 3.2. reset this tree node's gradient histogram to 0
+            histMat.zero();
             // 3.3. write split info to vectors
             splitFidVec.set(nid, bestSplit.getFid());
             splitFvalueVec.set(nid, bestSplit.getFvalue());
             splitGainVec.set(nid, bestSplit.getLossChg());
-            // 3.4. update node grad stat
-            //
-            //
-            //
+            // 3.4. update children grad stats
+            if (bestSplit.getFid() != -1) {
+                updateNodeStat(2 * nid + 1, bestSplit.getLeftGradPair());
+                updateNodeStat(2 * nid + 2, bestSplit.getRightGradPair());
+            }
         }
         // 4. push split entry to PS
         Set<String> needFlushMatrices = new HashSet<>(4);
         // 4.1. split feature id
         PSModel splitFidModel = model.getPSModel(GBDTModel.SPLIT_FEAT_MAT());
         splitFidModel.increment(currentTree, splitFidVec);
-        needFlushMatrices.add(GBDTModel.SPLIT_RESULT_MAT());
+        needFlushMatrices.add(GBDTModel.SPLIT_FEAT_MAT());
         // 4.2. split feature value
         PSModel splitFvalueModel = model.getPSModel(GBDTModel.SPLIT_VALUE_MAT());
         splitFvalueModel.increment(currentTree, splitFvalueVec);
@@ -268,9 +262,11 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
         needFlushMatrices.add(GBDTModel.SPLIT_GAIN_MAT());
         // 4.4. node grad stat
         needFlushMatrices.add(GBDTModel.NODE_GRAD_MAT());
-        // 4.5. flush
+        // 4.5. flush & clock
         clockAllMatrix(needFlushMatrices, true);
-        // 5. set phase
+        // 5. finish current phase
+        LOG.info(String.format("Find split cost: %d ms",
+          System.currentTimeMillis() - startTime));
         this.phase = GBDTPhase.AFTER_SPLIT;
     }
 

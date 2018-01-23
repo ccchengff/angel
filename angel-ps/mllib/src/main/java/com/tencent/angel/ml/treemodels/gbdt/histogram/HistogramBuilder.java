@@ -66,14 +66,20 @@ public class HistogramBuilder {
         if (!canSubtract) {
             res = new Histogram(controller.getFset().length,
                     param.numSplit, param.numClass);
-            List<Future<Void>> futures = new ArrayList<>(threads.length);
-            for (BuilderThread thread : threads) {
+            if (param.numThread > 1) {
+              List<Future<Void>> futures = new ArrayList<>(threads.length);
+              for (BuilderThread thread : threads) {
                 thread.nid = nid;
                 thread.histogram = res;
                 futures.add(threadPool.submit(thread));
-            }
-            for (Future<Void> future : futures) {
+              }
+              for (Future<Void> future : futures) {
                 future.get();
+              }
+            } else {
+              threads[0].nid = nid;
+              threads[0].histogram = res;
+              threads[0].call();
             }
         }
         LOG.info(String.format("Build histogram of node[%d] cost %d ms",
@@ -107,7 +113,15 @@ public class HistogramBuilder {
                 throw new AngelException("Multi-class not implemented");
             }
             synchronized (this) {
+                LOG.info(String.format("Thread[%d] incoming", threadId));
+                if (histogram.getHistogram(0) == null) {
+                    LOG.info(String.format("Thread[%d] allocating", threadId));
+                    histogram.alloc();
+                    LOG.info(String.format("Thread[%d] finished allocating", threadId));
+                }
+                LOG.info(String.format("Thread[%d] adding", threadId));
                 histogram.plusBy(selfHist);
+                LOG.info(String.format("Thread[%d] finished adding", threadId));
             }
         }
 
@@ -132,32 +146,38 @@ public class HistogramBuilder {
                     // 2.3. add to histogram
                     DenseFloatVector hist;
                     if (fset.length == param.numFeature) {
-                        hist = histogram.getHistogram(fid);
+                        hist = selfHist.getHistogram(fid);
                     } else {
                         int index = Arrays.binarySearch(fset, fid);
                         if (index < 0) {
                             continue;
                         }
-                        hist = histogram.getHistogram(index);
+                        hist = selfHist.getHistogram(index);
                     }
                     int binId = bins[j];
                     int gradId = binId;
                     int hessId = gradId + param.numSplit;
                     hist.set(gradId, hist.get(gradId) + insGrad[insId]);
                     hist.set(hessId, hist.get(hessId) + insHess[insId]);
+                    // 2.4. add the reverse to zero bin
+                    int zeroId = trainDataStore.getZeroBin(fid);
+                    int gradZeroId = zeroId;
+                    int hessZeroId = gradZeroId + param.numSplit;
+                    hist.set(gradZeroId, hist.get(gradZeroId) - insGrad[insId]);
+                    hist.set(hessZeroId, hist.get(hessZeroId) - insHess[insId]);
                 }
-                // 2.3. record gradients taken
+                // 2.5. record gradients taken
                 gradTaken += insGrad[insId];
                 hessTaken += insHess[insId];
             }
-            // 3. subtract gradients taken from zero bucket
+            // 3. add to zero bin
             for (int i = 0; i < fset.length; i++) {
-                DenseFloatVector hist = histogram.getHistogram(i);
+                DenseFloatVector hist = selfHist.getHistogram(i);
                 int zeroId = trainDataStore.getZeroBin(fset[i]);
-                int gradId = zeroId;
-                int hessId = gradId + param.numSplit;
-                hist.set(gradId, hist.get(gradId) - gradTaken);
-                hist.set(hessId, hist.get(hessId) - hessTaken);
+                int gradZeroId = zeroId;
+                int hessZeroId = gradZeroId + param.numSplit;
+                hist.set(gradZeroId, hist.get(gradZeroId) + gradTaken);
+                hist.set(hessZeroId, hist.get(hessZeroId) + hessTaken);
             }
         }
 
@@ -213,10 +233,10 @@ public class HistogramBuilder {
                 }
                 // 4. add remaining grad and hess to zero bin
                 int zeroId = trainDataStore.getZeroBin(fid);
-                int gradId = zeroId;
-                int hessId = gradId + param.numSplit;
-                hist.set(gradId, sumGrad - gradTaken);
-                hist.set(hessId, sumHess - hessTaken);
+                int gradZeroId = zeroId;
+                int hessZeroId = gradZeroId + param.numSplit;
+                hist.set(gradZeroId, sumGrad - gradTaken);
+                hist.set(hessZeroId, sumHess - hessTaken);
                 // 5. put to result
                 histogram.set(i, hist);
             }

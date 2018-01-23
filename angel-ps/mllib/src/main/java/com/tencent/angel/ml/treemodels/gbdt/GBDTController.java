@@ -74,6 +74,8 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
         //objFunc = new RegLossObj(new Loss.BinaryLogisticLoss());
         insGrad = new float[trainDataStore.getNumInstances()];
         insHess = new float[trainDataStore.getNumInstances()];
+        // nodes should be sorted so that the orders
+        // are the same when all workers iterate them
         readyNodes = new TreeSet<>();
         activeNodes = new TreeSet<>();
         histograms = new TreeMap<>();
@@ -239,9 +241,13 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
                 float leftSumGrad = nodeGrads.get(left);
                 float leftSumHess = nodeGrads.get(left + param.maxNodeNum);
                 leftChild.setGradStats(leftSumGrad, leftSumHess);
+                LOG.info(String.format("Left child[%d] sumGrad[%f] sumHess[%f]",
+                  2 * nid + 1, leftSumGrad, leftSumHess));
                 float rightSumGrad = nodeGrads.get(right);
                 float rightSumHess = nodeGrads.get(right + param.maxNodeNum);
                 rightChild.setGradStats(rightSumGrad, rightSumHess);
+                LOG.info(String.format("Right child[%d] sumGrad[%f] sumHess[%f]",
+                  2 * nid + 2, rightSumGrad, rightSumHess));
             } else {
                 float[] leftSumGrad = new float[param.numClass];
                 float[] leftSumHess = new float[param.numClass];
@@ -250,6 +256,8 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
                     leftSumHess[i] = nodeGrads.get((left + param.maxNodeNum) * param.numClass + i);
                     leftChild.setGradStats(leftSumGrad, leftSumHess);
                 }
+                LOG.info(String.format("Left child[%d] sumGrad%s sumHess%s",
+                  2 * nid + 1, Arrays.toString(leftSumGrad), Arrays.toString(leftSumHess)));
                 float[] rightSumGrad = new float[param.numClass];
                 float[] rightSumHess = new float[param.numClass];
                 for (int i = 0; i < param.numClass; i++) {
@@ -257,6 +265,8 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
                     rightSumHess[i] = nodeGrads.get((right + param.maxNodeNum) * param.numClass + i);
                     rightChild.setGradStats(rightSumGrad, rightSumHess);
                 }
+                LOG.info(String.format("Right child[%d] sumGrad%s sumHess%s",
+                  2 * nid + 1, Arrays.toString(rightSumGrad), Arrays.toString(rightSumHess)));
             }
             // 4. set children as ready
             readyNodes.add(left);
