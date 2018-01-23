@@ -249,6 +249,17 @@ public class FPDataStore extends DataStore {
                 System.currentTimeMillis() - startTime));
     }
 
+    @Override
+    public float get(int fid, int insId, float defaultValue) {
+        int index = Arrays.binarySearch(featIndices[fid - featLo], insId);
+        if (index >= 0) {
+            int binId = featBins[fid - featLo][index];
+            return splits[fid - featLo][binId];
+        } else {
+            return defaultValue;
+        }
+    }
+
     public int[] getFeatIndices(int fid) {
         return featIndices[fid - featLo];
     }

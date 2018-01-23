@@ -12,6 +12,7 @@ import com.tencent.angel.ml.treemodels.gbdt.histogram.SplitFinder;
 import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.storage.DPDataStore;
 import com.tencent.angel.ml.treemodels.storage.DataStore;
+import com.tencent.angel.ml.treemodels.tree.basic.SplitEntry;
 import com.tencent.angel.ml.treemodels.tree.regression.GradPair;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNode;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNodeStat;
@@ -139,54 +140,9 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
 
     public abstract void createNewTree() throws Exception;
 
-    protected abstract void sampleFeature();
+    protected abstract void sampleFeature() throws Exception;
 
-    // TODO: refine calGradPairs
-    protected void calGradPairs() {
-        LOG.info("------Calc grad pairs------");
-        long startTime = System.currentTimeMillis();
-        // calc grad pair, sumGrad and sumHess
-        Loss.BinaryLogisticLoss objective = new Loss.BinaryLogisticLoss();
-        int numInstances = trainDataStore.getNumInstances();
-        float[] labels = trainDataStore.getLabels();
-        float[] preds = trainDataStore.getPreds();
-        float[] weights = trainDataStore.getWeights();
-        //gradPairs = objFunc.calGrad(labels, preds, weights, gradPairs);
-        if (param.numClass == 2) {
-            float sumGrad = 0.0f;
-            float sumHess = 0.0f;
-            for (int insId = 0; insId < numInstances; insId++) {
-                float prob = objective.transPred(preds[insId]);
-                insGrad[insId] = objective.firOrderGrad(prob, labels[insId]) * weights[insId];
-                insHess[insId] = objective.secOrderGrad(prob, labels[insId]) * weights[insId];
-                sumGrad += insGrad[insId];
-                sumHess += insHess[insId];
-            }
-            // 2. set root grad stats
-            if (parallelMode.equals(ParallelMode.FEATURE_PARALLEL)) {
-                forest[currentTree].getRoot().setGradStats(sumGrad, sumHess);
-                // 3. leader worker push root grad stats
-                if (taskContext.getTaskIndex() == 0) {
-                    updateNodeStat(0, sumGrad, sumHess);
-                }
-            }
-        } else {
-            float[] sumGrad = new float[param.numClass];
-            float[] sumHess = new float[param.numClass];
-            //
-            // sum up
-            //
-            // 2. set root grad stats
-            if (parallelMode.equals(ParallelMode.FEATURE_PARALLEL)) {
-                forest[currentTree].getRoot().setGradStats(sumGrad, sumHess);
-                // 3. leader worker push root grad stats
-                if (taskContext.getTaskIndex() == 0) {
-                    updateNodeStats(0, sumGrad, sumHess);
-                }
-            }
-        }
-        LOG.info(String.format("Calc grad pair cost %d ms", System.currentTimeMillis() - startTime));
-    }
+    protected abstract void calGradPairs() throws Exception;
 
     public void chooseActive() {
         LOG.info("------Choose active nodes------");
@@ -261,6 +217,54 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
     public abstract void findSplit() throws Exception;
 
     public abstract void afterSplit() throws Exception;
+
+    protected void splitNode(int nid, SplitEntry splitEntry, DenseFloatVector nodeGrads) {
+        LOG.info(String.format("Split node[%d]: feature[%d], value[%f], lossChg[%f]",
+                nid, splitEntry.getFid(), splitEntry.getFvalue(), splitEntry.getLossChg()));
+        // 1. set split info to this node
+        RegTNode node = forest[currentTree].getNode(nid);
+        node.setSplitEntry(splitEntry);
+        if (splitEntry.getFid() != -1) {
+            // 2. set children nodes of this node
+            int left = 2 * nid + 1;
+            int right = 2 * nid + 2;
+            RegTNode leftChild = new RegTNode(left, node, param.numClass);
+            RegTNode rightChild = new RegTNode(right, node, param.numClass);
+            node.setLeftChild(leftChild);
+            node.setRightChild(rightChild);
+            forest[currentTree].setNode(left, leftChild);
+            forest[currentTree].setNode(right, rightChild);
+            // 3. set grad stats for children
+            if (param.numClass == 2) {
+                float leftSumGrad = nodeGrads.get(left);
+                float leftSumHess = nodeGrads.get(left + param.maxNodeNum);
+                leftChild.setGradStats(leftSumGrad, leftSumHess);
+                float rightSumGrad = nodeGrads.get(right);
+                float rightSumHess = nodeGrads.get(right + param.maxNodeNum);
+                rightChild.setGradStats(rightSumGrad, rightSumHess);
+            } else {
+                float[] leftSumGrad = new float[param.numClass];
+                float[] leftSumHess = new float[param.numClass];
+                for (int i = 0; i < param.numClass; i++) {
+                    leftSumGrad[i] = nodeGrads.get(left * param.numClass + i);
+                    leftSumHess[i] = nodeGrads.get((left + param.maxNodeNum) * param.numClass + i);
+                    leftChild.setGradStats(leftSumGrad, leftSumHess);
+                }
+                float[] rightSumGrad = new float[param.numClass];
+                float[] rightSumHess = new float[param.numClass];
+                for (int i = 0; i < param.numClass; i++) {
+                    rightSumGrad[i] = nodeGrads.get(right * param.numClass + i);
+                    rightSumHess[i] = nodeGrads.get((right + param.maxNodeNum) * param.numClass + i);
+                    rightChild.setGradStats(rightSumGrad, rightSumHess);
+                }
+            }
+            // 4. set children as ready
+            readyNodes.add(left);
+            readyNodes.add(right);
+        } else {
+            setNodeToLeaf(nid);
+        }
+    }
 
     public void finishCurrentTree(EvalMetric[] evalMetrics) throws Exception {
         updateLeafPreds();

@@ -19,12 +19,32 @@ public class Histogram {
         histograms = new DenseFloatVector[numFeature];
     }
 
+    public void alloc() {
+        int numHist = numClass == 2 ? 1 : numClass;
+        int sizePerFeat = numHist * numSplit * 2;
+        for (int i = 0; i < histograms.length; i++) {
+            histograms[i] = new DenseFloatVector(sizePerFeat);
+        }
+    }
+
     public DenseFloatVector getHistogram(int index) {
         return histograms[index];
     }
 
     public void set(int index, DenseFloatVector hist) {
         this.histograms[index] = hist;
+    }
+
+    public Histogram plusBy(Histogram other) {
+        for (int i = 0; i < histograms.length; i++) {
+            int size = histograms[i].getDimension();
+            float[] myValues = histograms[i].getValues();
+            float[] otherValues = other.histograms[i].getValues();
+            for (int j = 0; j < size; j++) {
+                myValues[j] += otherValues[j];
+            }
+        }
+        return this;
     }
 
     public Histogram subtract(Histogram other) {

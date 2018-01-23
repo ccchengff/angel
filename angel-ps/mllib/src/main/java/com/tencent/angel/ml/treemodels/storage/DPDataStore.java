@@ -232,6 +232,17 @@ public class DPDataStore extends DataStore {
         }
     }
 
+    @Override
+    public float get(int insId, int fid, float defaultValue) {
+        int index = Arrays.binarySearch(insIndices[insId], fid);
+        if (index >= 0) {
+            int binId = insBins[insId][index];
+            return splits[fid][binId];
+        } else {
+            return defaultValue;
+        }
+    }
+
     public int[] getInsIndices(int insId) {
         return insIndices[insId];
     }

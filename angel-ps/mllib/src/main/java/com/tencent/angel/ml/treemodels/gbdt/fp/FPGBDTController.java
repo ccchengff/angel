@@ -1,6 +1,8 @@
 package com.tencent.angel.ml.treemodels.gbdt.fp;
 
 import com.tencent.angel.exception.AngelException;
+import com.tencent.angel.ml.objective.Loss;
+import com.tencent.angel.ml.treemodels.gbdt.ParallelMode;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowFunc;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowResult;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetUpdateFunc;
@@ -58,7 +60,6 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
         sampleFeature();
         // 3. calc grad pairs
         calGradPairs();
-        model.getPSModel(GBDTModel.NODE_GRAD_MAT()).clock(true).get();
         // 4. clear histogram placeholder
         this.histograms.clear();
         // 5. reset instance position, set the root node's span
@@ -75,7 +76,7 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
     }
 
     @Override
-    protected void sampleFeature() {
+    protected void sampleFeature() throws Exception {
         LOG.info("------Sample feature------");
         long startTime = System.currentTimeMillis();
         if (param.featSampleRatio < 1) {
@@ -99,6 +100,50 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
         }
         LOG.info(String.format("Sample feature cost %d ms, sample ratio %f, return %d features",
                 System.currentTimeMillis() - startTime, param.featSampleRatio, fset.length));
+    }
+
+    @Override
+    protected void calGradPairs() throws Exception {
+        LOG.info("------Calc grad pairs------");
+        long startTime = System.currentTimeMillis();
+        // calc grad pair, sumGrad and sumHess
+        Loss.BinaryLogisticLoss objective = new Loss.BinaryLogisticLoss();
+        int numInstances = trainDataStore.getNumInstances();
+        float[] labels = trainDataStore.getLabels();
+        float[] preds = trainDataStore.getPreds();
+        float[] weights = trainDataStore.getWeights();
+        //gradPairs = objFunc.calGrad(labels, preds, weights, gradPairs);
+        if (param.numClass == 2) {
+            float sumGrad = 0.0f;
+            float sumHess = 0.0f;
+            for (int insId = 0; insId < numInstances; insId++) {
+                float prob = objective.transPred(preds[insId]);
+                insGrad[insId] = objective.firOrderGrad(prob, labels[insId]) * weights[insId];
+                insHess[insId] = objective.secOrderGrad(prob, labels[insId]) * weights[insId];
+                sumGrad += insGrad[insId];
+                sumHess += insHess[insId];
+            }
+            // 2. set root grad stats
+            forest[currentTree].getRoot().setGradStats(sumGrad, sumHess);
+            // 3. leader worker push root grad stats
+            if (taskContext.getTaskIndex() == 0) {
+                updateNodeStat(0, sumGrad, sumHess);
+            }
+        } else {
+            float[] sumGrad = new float[param.numClass];
+            float[] sumHess = new float[param.numClass];
+            //
+            // sum up
+            //
+            // 2. set root grad stats
+            forest[currentTree].getRoot().setGradStats(sumGrad, sumHess);
+            // 3. leader worker push root grad stats
+            if (taskContext.getTaskIndex() == 0) {
+                updateNodeStats(0, sumGrad, sumHess);
+            }
+        }
+        model.getPSModel(GBDTModel.NODE_GRAD_MAT()).clock(true).get();
+        LOG.info(String.format("Calc grad pair cost %d ms", System.currentTimeMillis() - startTime));
     }
 
     @Override
@@ -324,6 +369,7 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
         return splitResult;
     }
 
+    /*
     private void splitNode(int nid, SplitEntry splitEntry, DenseFloatVector nodeGrads) {
         LOG.info(String.format("Split node[%d]: feature[%d], value[%f], lossChg[%f]",
                 nid, splitEntry.getFid(), splitEntry.getFvalue(), splitEntry.getLossChg()));
@@ -371,6 +417,7 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
             setNodeToLeaf(nid);
         }
     }
+    */
 
     private void updateInstancePos(int nid, RangeBitSet splitResult, boolean defaultLeft) {
         int nodeStart = nodePosStart[nid];

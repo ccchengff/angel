@@ -40,6 +40,8 @@ public abstract class DataStore {
 
     public abstract void init(DataBlock<LabeledData> dataStorage, GBDTModel model) throws Exception;
 
+    public abstract float get(int rowId, int colId, float defaultValue);
+
     public int getNumInstances() {
         return numInstances;
     }

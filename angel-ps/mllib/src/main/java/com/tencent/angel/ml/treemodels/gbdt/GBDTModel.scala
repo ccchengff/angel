@@ -27,6 +27,7 @@ object GBDTModel {
 
   // data parallel matrices
   val FEAT_SAMPLE_MAT = "gbdt.feature.subsample"
+  val GRAD_HIST_MAT_PREFIX = "gbdt.grad.histogram.node"
 
   // feature parallel matrices
   val INS_SAMPLE_MAT = "gbdt.instance.subsample"

@@ -8,6 +8,7 @@ import com.tencent.angel.ml.treemodels.gbdt.ParallelMode;
 import com.tencent.angel.ml.treemodels.gbdt.dp.DPGBDTController;
 import com.tencent.angel.ml.treemodels.gbdt.fp.FPGBDTController;
 import com.tencent.angel.ml.treemodels.param.GBDTParam;
+import com.tencent.angel.ml.treemodels.storage.DPDataStore;
 import com.tencent.angel.ml.treemodels.storage.FPDataStore;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNodeStat;
 import org.apache.commons.logging.Log;
@@ -15,6 +16,7 @@ import org.apache.commons.logging.LogFactory;
 
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -83,9 +85,80 @@ public class HistogramBuilder {
         private final int threadId;
         private int nid;
         private Histogram histogram;
+        private Histogram selfHist;  // for data-parallel mode
 
         private void dpBuild(DPGBDTController controller) {
+            DPDataStore trainDataStore = controller.getTrainDataStore();
+            int[] fset = controller.getFset();
+            int[] nodeToIns = controller.getNodeToIns();
+            int nodeStart = controller.getNodePosStart(nid);
+            int nodeEnd = controller.getNodePosEnd(nid);
+            int insPerThread = (nodeEnd - nodeStart + 1) / param.numThread;
+            int from = threadId * insPerThread;
+            int to = threadId + 1 == param.numThread
+                    ? nodeEnd + 1 : from + insPerThread;
+            float[] insGrad = controller.getInsGrad();
+            float[] insHess = controller.getInsHess();
+            RegTNodeStat nodeStat = controller.getLastTree().getNode(nid).getNodeStat();
+            if (param.numClass == 2) {
+                dpBinaryClassBuild(trainDataStore, fset, insGrad, insHess,
+                        nodeStat, nodeToIns, from, to);
+            } else {
+                throw new AngelException("Multi-class not implemented");
+            }
+            synchronized (this) {
+                histogram.plusBy(selfHist);
+            }
+        }
 
+        private void dpBinaryClassBuild(DPDataStore trainDataStore, int[] fset,
+                                        float[] insGrad, float[] insHess, RegTNodeStat nodeStat,
+                                        int[] nodeToIns, int from, int to) {
+            // 1. allocate histogram
+            selfHist = new Histogram(fset.length, param.numSplit, param.numClass);
+            selfHist.alloc();
+            // 2. for each instance, loop non-zero features,
+            // add to histogram, and record the gradients taken
+            float gradTaken = 0, hessTaken = 0;
+            for (int i = from; i < to; i++) {
+                // 2.1. get instance
+                int insId = nodeToIns[i];
+                int[] indices = trainDataStore.getInsIndices(insId);
+                int[] bins = trainDataStore.getInsBins(insId);
+                int nnz = indices.length;
+                // 2.2. loop non-zero instances
+                for (int j = 0; j < nnz; j++) {
+                    int fid = indices[j];
+                    // 2.3. add to histogram
+                    DenseFloatVector hist;
+                    if (fset.length == param.numFeature) {
+                        hist = histogram.getHistogram(fid);
+                    } else {
+                        int index = Arrays.binarySearch(fset, fid);
+                        if (index < 0) {
+                            continue;
+                        }
+                        hist = histogram.getHistogram(index);
+                    }
+                    int binId = bins[j];
+                    int gradId = binId;
+                    int hessId = gradId + param.numSplit;
+                    hist.set(gradId, hist.get(gradId) + insGrad[insId]);
+                    hist.set(hessId, hist.get(hessId) + insHess[insId]);
+                }
+                // 2.3. record gradients taken
+                gradTaken += insGrad[insId];
+                hessTaken += insHess[insId];
+            }
+            // 3. subtract gradients taken from zero bucket
+            for (int i = 0; i < fset.length; i++) {
+                DenseFloatVector hist = histogram.getHistogram(i);
+                int zeroId = trainDataStore.getZeroBin(fset[i]);
+                int gradId = zeroId;
+                int hessId = gradId + param.numSplit;
+                hist.set(gradId, hist.get(gradId) - gradTaken);
+                hist.set(hessId, hist.get(hessId) - hessTaken);
+            }
         }
 
         private void fpBuid(FPGBDTController controller) {
