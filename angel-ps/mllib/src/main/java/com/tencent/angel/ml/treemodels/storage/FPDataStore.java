@@ -136,6 +136,12 @@ public class FPDataStore extends DataStore {
         labelsModel.increment(0, labelsVec);
         labelsModel.clock(true).get();
         labels = ((DenseFloatVector) labelsModel.getRow(0)).getValues();
+        if (labels.length > globalNumIns) {
+            labels = Arrays.copyOf(labels, globalNumIns);
+        } else if (labels.length < globalNumIns) {
+            throw new AngelException(String.format("There are %d instances but " +
+                    "got only %d labels from PS", globalNumIns, labels.length));
+        }
         numInstances = globalNumIns;
 
         // 4. create sketches

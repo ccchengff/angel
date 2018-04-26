@@ -1,8 +1,5 @@
 package com.tencent.angel.ml.treemodels.gbdt.fp;
 
-import com.tencent.angel.exception.AngelException;
-import com.tencent.angel.ml.objective.Loss;
-import com.tencent.angel.ml.treemodels.gbdt.ParallelMode;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowFunc;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowResult;
 import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetUpdateFunc;
@@ -22,6 +19,7 @@ import com.tencent.angel.ml.treemodels.tree.basic.SplitEntry;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNode;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNodeStat;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTree;
+import com.tencent.angel.ml.utils.Maths;
 import com.tencent.angel.worker.task.TaskContext;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.apache.commons.logging.Log;
@@ -107,7 +105,6 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
         LOG.info("------Calc grad pairs------");
         long startTime = System.currentTimeMillis();
         // calc grad pair, sumGrad and sumHess
-        Loss.BinaryLogisticLoss objective = new Loss.BinaryLogisticLoss();
         int numInstances = trainDataStore.getNumInstances();
         float[] labels = trainDataStore.getLabels();
         float[] preds = trainDataStore.getPreds();
@@ -116,10 +113,11 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
         if (param.numClass == 2) {
             float sumGrad = 0.0f;
             float sumHess = 0.0f;
+            // 1. calc grad pair
             for (int insId = 0; insId < numInstances; insId++) {
-                float prob = objective.transPred(preds[insId]);
-                insGrad[insId] = objective.firOrderGrad(prob, labels[insId]) * weights[insId];
-                insHess[insId] = objective.secOrderGrad(prob, labels[insId]) * weights[insId];
+                float prob = Maths.sigmoid(preds[insId]);
+                insGrad[insId] = (prob - labels[insId]) * weights[insId];
+                insHess[insId] = Math.max(prob * (1 - prob), 1e-8f) * weights[insId];
                 sumGrad += insGrad[insId];
                 sumHess += insHess[insId];
             }
@@ -133,9 +131,24 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
         } else {
             float[] sumGrad = new float[param.numClass];
             float[] sumHess = new float[param.numClass];
-            //
-            // sum up
-            //
+            // 1. calc grad pair
+            float[] tmp = new float[param.numClass];
+            for (int insId = 0, insOffset = 0; insId < numInstances;
+                 insId++, insOffset += param.numClass) {
+                System.arraycopy(preds, insOffset, tmp, 0, param.numClass);
+                Maths.softmax(tmp);
+                int label = (int) labels[insId];
+                float weight = weights[insId];
+                for (int k = 0; k < param.numClass; k++) {
+                    float prob = tmp[k];
+                    float grad = (label == k ? prob - 1.0f : prob) * weight;
+                    float hess = prob * (1.0f - prob) * weight;
+                    insGrad[insOffset + k] = grad;
+                    insHess[insOffset + k] = hess;
+                    sumGrad[k] += grad;
+                    sumHess[k] += hess;
+                }
+            }
             // 2. set root grad stats
             forest[currentTree].getRoot().setGradStats(sumGrad, sumHess);
             // 3. leader worker push root grad stats
@@ -312,8 +325,8 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
         int nodeEnd = nodePosEnd[nid];
         RangeBitSet splitResult = new RangeBitSet(nodeStart, nodeEnd);
         LOG.info(String.format("Node[%d] span: [%d-%d]", nid, nodeStart, nodeEnd));
-        RegTNodeStat nodeStat = node.getNodeStat();
         if (param.numClass == 2) {
+            RegTNodeStat nodeStat = node.getNodeStat();
             float leftChildSumGrad = 0;
             float leftChildSumHess = 0;
             float rightChildSumGrad = 0;
@@ -323,8 +336,8 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
                 int[] bins = trainDataStore.getFeatBins(splitFid);
                 float[] splits = trainDataStore.getSplits(splitFid);
                 int nnz = indices.length;
-                LOG.info(String.format("Candidate splits of feature[%d]: %s",
-                        splitFid, Arrays.toString(splits)));
+                //LOG.info(String.format("Candidate splits of feature[%d]: %s",
+                //        splitFid, Arrays.toString(splits)));
                 if (splitFvalue < 0.0f) {
                     // default to right child
                     // pick out instances that should be in left child
@@ -367,7 +380,72 @@ public class FPGBDTController extends GBDTController<FPDataStore> {
             updateNodeStat(2 * nid + 1, leftChildSumGrad, leftChildSumHess);
             updateNodeStat(2 * nid + 2, rightChildSumGrad, rightChildSumHess);
         } else {
-            throw new AngelException("Multi-class not implemented yet");
+            RegTNodeStat[] nodeStats = node.getNodeStats();
+            float[] leftChildSumGrad = new float[param.numClass];
+            float[] leftChildSumHess = new float[param.numClass];
+            float[] rightChildSumGrad = new float[param.numClass];
+            float[] rightChildSumHess = new float[param.numClass];
+            if (nodeStart <= nodeEnd) {
+                int[] indices = trainDataStore.getFeatIndices(splitFid);
+                int[] bins = trainDataStore.getFeatBins(splitFid);
+                float[] splits = trainDataStore.getSplits(splitFid);
+                int nnz = indices.length;
+                //LOG.info(String.format("Candidate splits of feature[%d]: %s",
+                //        splitFid, Arrays.toString(splits)));
+                if (splitFvalue < 0.0f) {
+                    // default to right child
+                    // pick out instances that should be in left child
+                    for (int i = 0; i < nnz; i++) {
+                        int insId = indices[i];
+                        int binId = bins[i];
+                        float insValue = splits[binId];
+                        int insPos = insToNode[insId];
+                        if (nodeStart <= insPos && insPos <= nodeEnd
+                                && insValue < splitFvalue) {
+                            splitResult.set(insPos);
+                            for (int k = 0; k < param.numClass; k++) {
+                                float grad = insGrad[insId * param.numClass + k];
+                                float hess = insHess[insId * param.numClass + k];
+                                leftChildSumGrad[k] += grad;
+                                leftChildSumHess[k] += hess;
+                            }
+                        }
+                    }
+                    for (int k = 0; k < param.numClass; k++) {
+                        rightChildSumGrad[k] = nodeStats[k].getSumGrad() - leftChildSumGrad[k];
+                        rightChildSumHess[k] = nodeStats[k].getSumHess() - leftChildSumHess[k];
+                    }
+                } else {
+                    // default to left child
+                    // pick out instances that should be in right child
+                    for (int i = 0; i < nnz; i++) {
+                        int insId = indices[i];
+                        int binId = bins[i];
+                        float insValue = splits[binId];
+                        int insPos = insToNode[insId];
+                        if (nodeStart <= insPos && insPos <= nodeEnd
+                                && insValue >= splitFvalue) {
+                            splitResult.set(insPos);
+                            for (int k = 0; k < param.numClass; k++) {
+                                float grad = insGrad[insId * param.numClass + k];
+                                float hess = insHess[insId * param.numClass + k];
+                                rightChildSumGrad[k] += grad;
+                                rightChildSumHess[k] += hess;
+                            }
+                        }
+                    }
+                    for (int k = 0; k < param.numClass; k++) {
+                        leftChildSumGrad[k] = nodeStats[k].getSumGrad() - rightChildSumGrad[k];
+                        leftChildSumHess[k] = nodeStats[k].getSumHess() - rightChildSumHess[k];
+                    }
+                }
+                LOG.info(String.format("Node[%d] split: left child with grad stats[%s, %s], " +
+                        "right child with grad stats[%s, %s]", nid,
+                        Arrays.toString(leftChildSumGrad), Arrays.toString(leftChildSumHess),
+                        Arrays.toString(rightChildSumGrad), Arrays.toString(rightChildSumHess)));
+            }
+            updateNodeStats(2 * nid + 1, leftChildSumGrad, leftChildSumHess);
+            updateNodeStats(2 * nid + 2, rightChildSumGrad, rightChildSumHess);
         }
         return splitResult;
     }

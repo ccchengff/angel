@@ -36,6 +36,7 @@ class GBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
   // GBDT params
   param.numTree = conf.getInt(MLConf.ML_GBDT_TREE_NUM, MLConf.DEFAULT_ML_GBDT_TREE_NUM)
   param.numClass = conf.getInt(MLConf.ML_GBDT_CLASS_NUM, MLConf.DEFAULT_ML_GBDT_CLASS_NUM)
+  param.leafwise = conf.getBoolean(MLConf.ML_GBDT_LEAF_WISE, MLConf.DEFAULT_ML_GBDT_LEAF_WISE)
   param.numThread = conf.getInt(MLConf.ML_GBDT_THREAD_NUM, MLConf.DEFAULT_ML_GBDT_THREAD_NUM)
   param.batchNum = conf.getInt(MLConf.ML_GBDT_BATCH_NUM, MLConf.DEFAULT_ML_GBDT_BATCH_NUM)
   param.learningRate = conf.getFloat(MLConf.ML_LEARN_RATE, MLConf.DEFAULT_ML_LEAR_RATE.asInstanceOf[Float])
@@ -66,8 +67,8 @@ class GBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     val initStart = System.currentTimeMillis()
     var controller: GBDTController[_] = null
     parallelMode match {
-      case ParallelMode.DATA_PARALLEL => controller = dataParallelTrain(train, vali)
-      case ParallelMode.FEATURE_PARALLEL => controller = featureParallelTrain(train, vali)
+      case ParallelMode.DATA_PARALLEL => controller = dpInit(train, vali)
+      case ParallelMode.FEATURE_PARALLEL => controller = fpInit(train, vali)
       case _ => throw new AngelException("No such parallel mode: " + parallelMode)
     }
     LOG.info(s"Initialize data info and controller " +
@@ -76,12 +77,9 @@ class GBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     LOG.info("Initialize evaluate metrics")
     var evalMetrics: Array[EvalMetric] = null
     if (param.numClass == 2) {
-      evalMetrics = new Array[EvalMetric](2)
-      evalMetrics(0) = new LogErrorMetric
-      evalMetrics(1) = new LogLossMetric
+      evalMetrics = Array[EvalMetric](new LogErrorMetric, new DirectLogLossMetric)
     } else {
-      evalMetrics = new Array[EvalMetric](1)
-      evalMetrics(0) = new MultiErrorMetric
+      evalMetrics = Array[EvalMetric](new MultiErrorMetric, new DirectCrossEntropyMetric)
     }
 
     LOG.info("Start to train")
@@ -94,7 +92,11 @@ class GBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
         case GBDTPhase.RUN_ACTIVE => controller.runActiveNodes()
         case GBDTPhase.FIND_SPLIT => controller.findSplit()
         case GBDTPhase.AFTER_SPLIT => controller.afterSplit()
-        case GBDTPhase.FINISH_TREE => controller.finishCurrentTree(evalMetrics)
+        case GBDTPhase.FINISH_TREE => {
+          controller.finishCurrentTree(evalMetrics)
+          LOG.info(s"${controller.currentTree} tree(s) done, " +
+            s"${System.currentTimeMillis() - trainStart} ms elapsed")
+        }
         case GBDTPhase.FINISHED => throw new AngelException("GBDT train procedure does not terminate properly")
         case _ => throw new AngelException("Unrecognizable GBDT phase: " + controller.phase)
       }
@@ -105,7 +107,7 @@ class GBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     model
   }
 
-  def dataParallelTrain(train: DataBlock[LabeledData], vali: DataBlock[LabeledData]): DPGBDTController = {
+  private def dpInit(train: DataBlock[LabeledData], vali: DataBlock[LabeledData]): DPGBDTController = {
     LOG.info("Initialize data meta info")
     val trainDataStore = new DPDataStore(ctx, param)
     trainDataStore.init(train, model)
@@ -122,7 +124,7 @@ class GBDTLearner(override val ctx: TaskContext) extends MLLearner(ctx) {
     controller
   }
 
-  def featureParallelTrain(train: DataBlock[LabeledData], vali: DataBlock[LabeledData]): FPGBDTController = {
+  private def fpInit(train: DataBlock[LabeledData], vali: DataBlock[LabeledData]): FPGBDTController = {
     LOG.info("Initialize data meta info")
     val trainDataStore = new FPDataStore(ctx, param)
     trainDataStore.init(train, model)

@@ -4,8 +4,6 @@ import com.tencent.angel.ml.treemodels.gbdt.fp.psf.ClearUpdate;
 import com.tencent.angel.ml.math.vector.DenseFloatVector;
 import com.tencent.angel.ml.metric.EvalMetric;
 import com.tencent.angel.ml.model.PSModel;
-import com.tencent.angel.ml.objective.Loss;
-import com.tencent.angel.ml.objective.ObjFunc;
 import com.tencent.angel.ml.treemodels.gbdt.histogram.Histogram;
 import com.tencent.angel.ml.treemodels.gbdt.histogram.HistogramBuilder;
 import com.tencent.angel.ml.treemodels.gbdt.histogram.SplitFinder;
@@ -17,6 +15,7 @@ import com.tencent.angel.ml.treemodels.tree.regression.GradPair;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNode;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTNodeStat;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTree;
+import com.tencent.angel.ml.utils.Maths;
 import com.tencent.angel.worker.task.TaskContext;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -39,7 +38,6 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
     protected int currentTree;  // current tree id
     protected GBDTPhase phase;  // current phase
 
-    protected ObjFunc objFunc;  // objective function
     protected float[] insGrad;  // first-order gradient of training instances
     protected float[] insHess;  // second-order gradient of training instances
 
@@ -71,9 +69,10 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
         forest = new RegTree[param.numTree];
         currentTree = 0;
         phase = GBDTPhase.NEW_TREE;
-        //objFunc = new RegLossObj(new Loss.BinaryLogisticLoss());
-        insGrad = new float[trainDataStore.getNumInstances()];
-        insHess = new float[trainDataStore.getNumInstances()];
+        // grad & hess for instances
+        int size = param.numClass == 2 ? 1 : param.numClass;
+        insGrad = new float[trainDataStore.getNumInstances() * size];
+        insHess = new float[trainDataStore.getNumInstances() * size];
         // nodes should be sorted so that the orders
         // are the same when all workers iterate them
         readyNodes = new TreeSet<>();
@@ -88,7 +87,6 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
         // predictions and weights for instances
         int numTrain = trainDataStore.getNumInstances();
         int numValid = validDataStore.getNumInstances();
-        int size = param.numClass == 2 ? 1 : param.numClass;
         float[] trainPreds = new float[numTrain * size];
         float[] trainWeights = new float[numTrain * size];
         Arrays.fill(trainWeights, 1.0f);
@@ -153,7 +151,6 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
         LOG.info("Ready nodes: " + Arrays.toString(readyNodesArr));
         float maxGain = Float.MIN_VALUE;
         int maxGainNid = -1;
-        boolean leafWise = false;
         for (Integer nid : readyNodesArr) {
             if (nid == 0) {
                 // activate root node
@@ -174,7 +171,7 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
                     readyNodes.remove(nid);
                     setNodeToLeaf(nid);
                 } else {
-                    if (leafWise) {
+                    if (param.leafwise) {
                         // leaf-wise
                         RegTNode node = forest[currentTree].getNode(nid);
                         float[] gains = node.calcGain(param);
@@ -192,7 +189,7 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
                 }
             }
         }
-        if (leafWise && maxGainNid != -1) {
+        if (param.leafwise && maxGainNid != -1) {
             activeNodes.add(maxGainNid);
             readyNodes.remove(maxGainNid);
         }
@@ -206,6 +203,16 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
             }
             readyNodes.clear();
             this.phase = GBDTPhase.FINISH_TREE;
+        }
+        // clear some histograms to save memory
+        Integer[] histKeys = new Integer[histograms.size()];
+        histograms.keySet().toArray(histKeys);
+        for (int nid : histKeys) {
+            int l = 2 * nid + 1, r = 2 * nid + 2;
+            if (!readyNodes.contains(l) && ! activeNodes.contains(l)
+                    && !readyNodes.contains(r) && !activeNodes.contains(r)) {
+                histograms.remove(nid);
+            }
         }
     }
 
@@ -271,7 +278,7 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
                     rightChild.setGradStats(rightSumGrad, rightSumHess);
                 }
                 LOG.info(String.format("Right child[%d] sumGrad%s sumHess%s",
-                  2 * nid + 1, Arrays.toString(rightSumGrad), Arrays.toString(rightSumHess)));
+                  2 * nid + 2, Arrays.toString(rightSumGrad), Arrays.toString(rightSumHess)));
             }
             // 4. set children as ready
             readyNodes.add(left);
@@ -351,6 +358,18 @@ public abstract class GBDTController<TrainDataStore extends DataStore> {
         validDataStore.additiveUpdatePreds(forest[currentTree], param);
         LOG.info(String.format("Update instance predictions cost %d ms",
                 System.currentTimeMillis() - startTime));
+
+        logPred("Train", trainDataStore.getPreds(), trainDataStore.getLabels());
+        logPred("Valid", validDataStore.getPreds(), validDataStore.getLabels());
+    }
+
+    private void logPred(String desc, float[] preds, float[] labels) {
+        if (param.numClass == 2) return; // only for multi-class
+        for (int i = 0; i < Math.min(10, labels.length); i++) {
+            float[] tmp = Arrays.copyOfRange(preds, i * param.numClass, (i + 1) * param.numClass);
+            LOG.info(String.format("%s[%d]: label=%d, pred=[%d, %f], preds=%s",
+                    desc, i, (int) labels[i], Maths.findMaxIndex(tmp), tmp[(int) labels[i]], Arrays.toString(tmp)));
+        }
     }
 
     protected void updateLeafPreds() throws Exception {

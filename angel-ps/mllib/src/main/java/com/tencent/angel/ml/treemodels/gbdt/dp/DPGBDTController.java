@@ -6,16 +6,12 @@ import com.tencent.angel.ml.math.vector.DenseIntVector;
 import com.tencent.angel.ml.math.vector.SparseFloatVector;
 import com.tencent.angel.ml.math.vector.SparseIntVector;
 import com.tencent.angel.ml.model.PSModel;
-import com.tencent.angel.ml.objective.Loss;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTController;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTModel;
 import com.tencent.angel.ml.treemodels.gbdt.GBDTPhase;
 import com.tencent.angel.ml.treemodels.gbdt.dp.psf.HistAggrFunc;
 import com.tencent.angel.ml.treemodels.gbdt.dp.psf.HistGetSplitFunc;
 import com.tencent.angel.ml.treemodels.gbdt.dp.psf.HistGetSplitResult;
-import com.tencent.angel.ml.treemodels.gbdt.fp.RangeBitSet;
-import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowFunc;
-import com.tencent.angel.ml.treemodels.gbdt.fp.psf.RangeBitSetGetRowResult;
 import com.tencent.angel.ml.treemodels.gbdt.histogram.Histogram;
 import com.tencent.angel.ml.treemodels.param.GBDTParam;
 import com.tencent.angel.ml.treemodels.storage.DPDataStore;
@@ -25,7 +21,6 @@ import com.tencent.angel.ml.treemodels.tree.regression.RegTNodeStat;
 import com.tencent.angel.ml.treemodels.tree.regression.RegTree;
 import com.tencent.angel.ml.utils.Maths;
 import com.tencent.angel.worker.task.TaskContext;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
@@ -109,19 +104,18 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
         LOG.info("------Calc grad pairs------");
         long startTime = System.currentTimeMillis();
         // calc grad pair, sumGrad and sumHess
-        Loss.BinaryLogisticLoss objective = new Loss.BinaryLogisticLoss();
         int numInstances = trainDataStore.getNumInstances();
         float[] labels = trainDataStore.getLabels();
         float[] preds = trainDataStore.getPreds();
         float[] weights = trainDataStore.getWeights();
-        //gradPairs = objFunc.calGrad(labels, preds, weights, gradPairs);
         if (param.numClass == 2) {
             float sumGrad = 0.0f;
             float sumHess = 0.0f;
+            // 1. calc grad pair
             for (int insId = 0; insId < numInstances; insId++) {
-                float prob = objective.transPred(preds[insId]);
-                insGrad[insId] = objective.firOrderGrad(prob, labels[insId]) * weights[insId];
-                insHess[insId] = objective.secOrderGrad(prob, labels[insId]) * weights[insId];
+                float prob = Maths.sigmoid(preds[insId]);
+                insGrad[insId] = (prob - labels[insId]) * weights[insId];
+                insHess[insId] = Math.max(prob * (1 - prob), 1e-8f) * weights[insId];
                 sumGrad += insGrad[insId];
                 sumHess += insHess[insId];
             }
@@ -138,9 +132,27 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
         } else {
             float[] sumGrad = new float[param.numClass];
             float[] sumHess = new float[param.numClass];
-            //
-            // sum up
-            //
+            // 1. calc grad pair
+            float[] tmp = new float[param.numClass];
+            for (int insId = 0, insOffset = 0; insId < numInstances;
+                 insId++, insOffset += param.numClass) {
+                System.arraycopy(preds, insOffset, tmp, 0, param.numClass);
+                Maths.softmax(tmp);
+                int label = (int) labels[insId];
+                float weight = weights[insId];
+                for (int k = 0; k < param.numClass; k++) {
+                    float prob = tmp[k];
+                    float grad = (label == k ? prob - 1.0f : prob) * weight;
+                    float hess = 2.0f * prob * (1.0f - prob) * weight;
+                    insGrad[insOffset + k] = grad;
+                    insHess[insOffset + k] = hess;
+                    sumGrad[k] += grad;
+                    sumHess[k] += hess;
+                }
+            }
+            LOG.info(String.format("Worker[%d] sumGrad%s, sumHess%s",
+                    taskContext.getTaskIndex(),
+                    Arrays.toString(sumGrad), Arrays.toString(sumHess)));
             // 2. sum up grad & hess
             updateNodeStats(0, sumGrad, sumHess);
             PSModel nodeStatsModel = model.getPSModel(GBDTModel.NODE_GRAD_MAT());
@@ -193,7 +205,7 @@ public class DPGBDTController extends GBDTController<DPDataStore> {
             needFlushMatrices.add(histName);
         }
         clockAllMatrix(needFlushMatrices, true);
-        if (isServerSplit || bytesPerItem == 4) {
+        if (isServerSplit || bytesPerItem != 4) {
             // if isServerSplit, we must make sure all histogram
             // are updated before servers start to find split;
             // else if using low precision update, we must make sure

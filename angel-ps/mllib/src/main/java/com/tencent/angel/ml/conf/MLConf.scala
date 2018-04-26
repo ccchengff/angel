@@ -103,6 +103,8 @@ object MLConf {
   val DEFAULT_ML_GBDT_PARALLEL_MODE = "data"
   val ML_GBDT_TREE_NUM = "ml.gbdt.tree.num"
   val DEFAULT_ML_GBDT_TREE_NUM = 10
+  val ML_GBDT_LEAF_WISE = "ml.gbdt.leaf.wise"
+  val DEFAULT_ML_GBDT_LEAF_WISE = false
   val ML_GBDT_TREE_DEPTH = "ml.gbdt.tree.depth"
   val DEFAULT_ML_GBDT_TREE_DEPTH = 5
   val ML_GBDT_MAX_NODE_NUM = "ml.gbdt.max.node.num"

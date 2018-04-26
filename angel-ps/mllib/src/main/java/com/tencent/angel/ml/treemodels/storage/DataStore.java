@@ -11,10 +11,16 @@ import com.tencent.angel.ml.treemodels.param.TreeParam;
 import com.tencent.angel.ml.treemodels.sketch.HeapQuantileSketch;
 import com.tencent.angel.worker.storage.DataBlock;
 import com.tencent.angel.worker.task.TaskContext;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 import java.util.Arrays;
+import java.util.Set;
+import java.util.TreeSet;
 
 public abstract class DataStore {
+    private static final Log LOG = LogFactory.getLog(DataStore.class);
+
     protected final TaskContext taskContext;
     // param
     protected final TreeParam param;
@@ -246,26 +252,35 @@ public abstract class DataStore {
                 }
             }
         } else {
-            boolean[] appear = new boolean[numClass];
-            int numAppeared = 0;
+            Set<Integer> appearSet = new TreeSet<>();
             for (float label : labels) {
-                int t = (int) label;
-                if (t >= 0 && t < numClass && !appear[t]) {
-                    appear[t] = true;
-                    numAppeared++;
-                    if (numAppeared == numClass) {
-                        return;
-                    }
-                }
+                appearSet.add((int) label);
             }
-            if (numAppeared == numClass - 1 && !appear[0]) {
-                // labels start from 1 instead of 0
+            Integer[] appear = new Integer[appearSet.size()];
+            appearSet.toArray(appear);
+            Arrays.sort(appear);
+            // check #label
+            if (appear.length > numClass) {
+                throw new AngelException(String.format(
+                        "There are %d classes, more than %d",
+                        appear.length, numClass));
+            } else if (appear.length < numClass) {
+                LOG.warn(String.format("There are %d classes, less than %d. " +
+                        "We suggest to check the data or hyper-parameters",
+                        appear.length, numClass));
+            }
+            // check span
+            int minLabel = appear[0], maxLabel = appear[appear.length - 1];
+            if (maxLabel - minLabel + 1 > numClass) {
+                throw new AngelException(String.format(
+                        "The span of labels is [%d, %d], which is discontiguous",
+                        minLabel, maxLabel));
+            } else if (minLabel == 1 || maxLabel == numClass) {
+                LOG.warn(String.format("Adjusting labels from [%d, %d] to [%d, %d]",
+                        1, numClass, 0, numClass - 1));
                 for (int i = 0; i < labels.length; i++) {
                     labels[i] -= 1;
                 }
-            } else {
-                throw new AngelException(String.format("Labels should be in [%d, %d]",
-                        0, numClass - 1));
             }
         }
     }

@@ -1,60 +1,40 @@
-package com.tencent.angel.ml.treemodels.tree.basic;
+package com.tencent.angel.ml.treemodels.tree.regression;
 
-import com.tencent.angel.ml.treemodels.tree.regression.GradPair;
+import com.tencent.angel.ml.treemodels.tree.basic.SplitEntry;
 
-public class SplitEntry {
-    /*public abstract int getFid();
-
-    public abstract boolean isEmpty();
-
-    public abstract int flowTo(float value);
-
-    public abstract int defaultTo();
-
-    public abstract boolean needReplace(float newLossChg, int splitFeature);
-
-    public abstract SplitType splitType();
-
-    public enum SplitType {
-        SPLIT_POINT("SPLIT_POINT"),
-        SPLIT_ENTRY("SPLIT_ENTRY");
-
-        private final String type;
-
-        SplitType(String type) {
-            this.type = type;
-        }
-
-        @Override
-        public String toString() {
-            return type;
-        }
-    }*/
+public class SplitPoint extends SplitEntry {
     private int fid;  // feature index used to split
     private float fvalue;  // feature value used to split
     private float lossChg;  // loss change after split this node
     private GradPair leftGradPair;  // grad pair of left child
     private GradPair rightGradPair; // grad pair of right child
 
-    public SplitEntry(int fid, float fvalue, float lossChg) {
+    public SplitPoint(int fid, float fvalue, float lossChg) {
         this.fid = fid;
         this.fvalue = fvalue;
         this.lossChg = lossChg;
     }
 
-    public SplitEntry() {
+    public SplitPoint() {
         this(-1, 0.0f, 0.0f);
     }
 
-    /**
-     * decides whether we can replace current entry with the given statistics This function gives
-     * better priority to lower index when loss_chg == new_loss_chg. Not the best way, but helps to
-     * give consistent result during multi-thread execution.
-     *
-     * @param newLossChg the new loss change
-     * @param splitFeature the split index
-     * @return the boolean whether the proposed split is better and can replace current split
-     */
+    @Override
+    public boolean isEmpty() {
+        return fid == -1;
+    }
+
+    @Override
+    public int flowTo(float value) {
+        return value <= fvalue ? 0 : 1;
+    }
+
+    @Override
+    public int defaultTo() {
+        return fvalue <= 0 ? 0 : 1;
+    }
+
+    @Override
     public boolean needReplace(float newLossChg, int splitFeature) {
         if (this.fid <= splitFeature) {
             return newLossChg > this.lossChg;
@@ -63,14 +43,13 @@ public class SplitEntry {
         }
     }
 
-    /**
-     * Update the split entry, replace it if e is better.
-     *
-     * @param e candidate split solution
-     * @return the boolean whether the proposed split is better and can replace current split
-     */
-    public boolean update(SplitEntry e) {
-        if (this.needReplace(e.lossChg, e.getFid())) {
+    /*@Override
+    public SplitType splitType() {
+        return SplitType.SPLIT_POINT;
+    }*/
+
+    public boolean update(SplitPoint e) {
+        if (this.needReplace(e.lossChg, e.fid)) {
             this.lossChg = e.lossChg;
             this.fid = e.fid;
             this.fvalue = e.fvalue;
@@ -93,18 +72,7 @@ public class SplitEntry {
         }
     }
 
-    public boolean isEmpty() {
-        return fid == -1;
-    }
-
-    public int flowTo(float value) {
-        return value <= fvalue ? 0 : 1;
-    }
-
-    public int defaultTo() {
-        return fvalue <= 0.0f ? 0 : 1;
-    }
-
+    @Override
     public int getFid() {
         return fid;
     }
@@ -143,5 +111,14 @@ public class SplitEntry {
 
     public void setRightGradPair(GradPair rightGradPair) {
         this.rightGradPair = rightGradPair;
+    }
+
+    @Override
+    public String toString() {
+        return String.format("fid[%d], fvalue[%f], lossChg[%f], "
+                        + "leftGradPair[%f, %f], rightGradPair[%f, %f]",
+                fid, fvalue, lossChg,
+                leftGradPair.getGrad(), leftGradPair.getHess(),
+                rightGradPair.getGrad(), rightGradPair.getHess());
     }
 }

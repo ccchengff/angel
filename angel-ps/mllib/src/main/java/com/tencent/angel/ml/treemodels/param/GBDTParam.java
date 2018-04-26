@@ -4,10 +4,11 @@ import com.tencent.angel.ml.utils.Maths;
 
 public class GBDTParam extends RegTParam {
     public int numTree;  // number of trees
+    public boolean leafwise;  // true if leaf-wise training, false if level-wise training
     public int numThread;  // parallelism
     public int batchNum;  // number of batch in mini-batch histogram building
 
-    public float minChildWeight;  // minimum amout of hessian (weight) allowed for a child
+    public float minChildWeight;  // minimum amount of hessian (weight) allowed for a child
     public float regAlpha;  // L1 regularization factor
     public float regLambda;  // L2 regularization factor
     public float maxLeafWeight; // maximum leaf weight, default 0 means no constraints

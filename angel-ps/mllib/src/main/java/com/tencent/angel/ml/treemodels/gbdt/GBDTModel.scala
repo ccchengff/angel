@@ -115,15 +115,18 @@ abstract class GBDTModel(conf: Configuration, _ctx: TaskContext = null) extends 
     .setNeedSave(false)
   addPSModel(GBDTModel.SPLIT_GAIN_MAT, splitGain)
 
+  private val numNodeStat = if (numClass == 2) 1 else numClass
   // Matrix 7: node's grad stats
-  private val nodeGradStats = PSModel(GBDTModel.NODE_GRAD_MAT, numTree, 2 * maxNodeNum, numTree / numPS, 2 * maxNodeNum)
+  private val nodeGradStats = PSModel(GBDTModel.NODE_GRAD_MAT,
+    numTree, 2 * maxNodeNum * numNodeStat, numTree / numPS, 2 * maxNodeNum * numNodeStat)
     .setRowType(RowType.T_FLOAT_DENSE)
     .setOplogType("DENSE_FLOAT")
     .setNeedSave(false)
   addPSModel(GBDTModel.NODE_GRAD_MAT, nodeGradStats)
 
   // Matrix 8: node's predict value
-  private val nodePred = PSModel(GBDTModel.NODE_PRED_MAT, numTree, maxNodeNum, numTree / numPS, maxNodeNum)
+  private val nodePred = PSModel(GBDTModel.NODE_PRED_MAT,
+    numTree, maxNodeNum * numNodeStat, numTree / numPS, maxNodeNum * numNodeStat)
     .setRowType(RowType.T_FLOAT_DENSE)
     .setOplogType("DENSE_FLOAT")
   addPSModel(GBDTModel.NODE_PRED_MAT, nodePred)

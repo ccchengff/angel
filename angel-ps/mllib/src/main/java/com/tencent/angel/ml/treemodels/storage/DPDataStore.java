@@ -196,23 +196,34 @@ public class DPDataStore extends DataStore {
             while (node != null && !node.isLeaf()) {
                 SplitEntry splitEntry = node.getSplitEntry();
                 int splitFid = splitEntry.getFid();
-                float splitFvalue = splitEntry.getFvalue();
+                // mark split
+                //float splitFvalue = splitEntry.getFvalue();
                 int index = Arrays.binarySearch(insIndices[insId], splitFid);
                 if (index >= 0) {
                     int binId = insBins[insId][index];
                     float insValue = splits[splitFid][binId];
-                    if (insValue < splitFvalue) {
+                    if (splitEntry.flowTo(insValue) == 0) {
                         node = node.getLeftChild();
                     } else {
                         node = node.getRightChild();
                     }
+                    //if (insValue < splitFvalue) {
+                    //    node = node.getLeftChild();
+                    //} else {
+                    //    node = node.getRightChild();
+                    //}
                 } else {
-                    boolean defaultLeft = splitFvalue >= 0.0f;
-                    if (defaultLeft) {
+                    if (splitEntry.defaultTo() == 0) {
                         node = node.getLeftChild();
                     } else {
                         node = node.getRightChild();
                     }
+                    //boolean defaultLeft = splitFvalue >= 0.0f;
+                    //if (defaultLeft) {
+                    //    node = node.getLeftChild();
+                    //} else {
+                    //    node = node.getRightChild();
+                    //}
                 }
             }
             if (node == null) {

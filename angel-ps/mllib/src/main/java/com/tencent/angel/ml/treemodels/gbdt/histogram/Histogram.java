@@ -27,6 +27,12 @@ public class Histogram {
         }
     }
 
+    public void alloc(int index) {
+        int numHist = numClass == 2 ? 1 : numClass;
+        int sizePerFeat = numHist * numSplit * 2;
+        histograms[index] = new DenseFloatVector(sizePerFeat);
+    }
+
     public DenseFloatVector getHistogram(int index) {
         return histograms[index];
     }

@@ -105,12 +105,14 @@ public class HistogramBuilder {
                     ? nodeEnd + 1 : from + insPerThread;
             float[] insGrad = controller.getInsGrad();
             float[] insHess = controller.getInsHess();
-            RegTNodeStat nodeStat = controller.getLastTree().getNode(nid).getNodeStat();
             if (param.numClass == 2) {
+                RegTNodeStat nodeStat = controller.getLastTree().getNode(nid).getNodeStat();
                 dpBinaryClassBuild(trainDataStore, fset, insGrad, insHess,
                         nodeStat, nodeToIns, from, to);
             } else {
-                throw new AngelException("Multi-class not implemented");
+                RegTNodeStat[] nodeStats = controller.getLastTree().getNode(nid).getNodeStats();
+                dpMultiClassBuild(trainDataStore, fset, insGrad, insHess,
+                        nodeStats, nodeToIns, from, to);
             }
             synchronized (BuilderThread.class) {
                 if (histogram.getHistogram(0) == null) {
@@ -127,8 +129,8 @@ public class HistogramBuilder {
             selfHist = new Histogram(fset.length, param.numSplit, param.numClass);
             selfHist.alloc();
             // 2. for each instance, loop non-zero features,
-            // add to histogram, and record the gradients taken
-            float gradTaken = 0, hessTaken = 0;
+            // add to histogram, and record the sum of grad & hess
+            float sumGrad = 0, sumHess = 0;
             for (int i = from; i < to; i++) {
                 // 2.1. get instance
                 int insId = nodeToIns[i];
@@ -161,9 +163,12 @@ public class HistogramBuilder {
                     hist.set(gradZeroId, hist.get(gradZeroId) - insGrad[insId]);
                     hist.set(hessZeroId, hist.get(hessZeroId) - insHess[insId]);
                 }
-                // 2.5. record gradients taken
-                gradTaken += insGrad[insId];
-                hessTaken += insHess[insId];
+                // 2.5. sum up
+                // sumGrad & sumHess in nodeStat is calculated
+                // from all instances, not instances on current worker
+                // so we need to sum up grad & hess in this loop
+                sumGrad += insGrad[insId];
+                sumHess += insHess[insId];
             }
             // 3. add to zero bin
             for (int i = 0; i < fset.length; i++) {
@@ -171,8 +176,78 @@ public class HistogramBuilder {
                 int zeroId = trainDataStore.getZeroBin(fset[i]);
                 int gradZeroId = zeroId;
                 int hessZeroId = gradZeroId + param.numSplit;
-                hist.set(gradZeroId, hist.get(gradZeroId) + gradTaken);
-                hist.set(hessZeroId, hist.get(hessZeroId) + hessTaken);
+                hist.set(gradZeroId, hist.get(gradZeroId) + sumGrad);
+                hist.set(hessZeroId, hist.get(hessZeroId) + sumHess);
+            }
+        }
+
+        private void dpMultiClassBuild(DPDataStore trainDataStore, int[] fset,
+                                       float[] insGrad, float[] insHess, RegTNodeStat[] nodeStats,
+                                       int[] nodeToIns, int from, int to) {
+            // 1. allocate histogram
+            selfHist = new Histogram(fset.length, param.numSplit, param.numClass);
+            selfHist.alloc();
+            // 2. for each instance, loop non-zero features,
+            // add to histogram, and record the gradients taken
+            float[] sumGrad = new float[param.numClass];
+            float[] sumHess = new float[param.numClass];
+            for (int i = from; i < to; i++) {
+                // 2.1. get instance
+                int insId = nodeToIns[i];
+                int[] indices = trainDataStore.getInsIndices(insId);
+                int[] bins = trainDataStore.getInsBins(insId);
+                int nnz = indices.length;
+                // 2.2. loop non-zero instances
+                for (int j = 0; j < nnz; j++) {
+                    int fid = indices[j];
+                    // 2.3. add to histogram
+                    DenseFloatVector hist;
+                    if (fset.length == param.numFeature) {
+                        hist = selfHist.getHistogram(fid);
+                    } else {
+                        int index = Arrays.binarySearch(fset, fid);
+                        if (index < 0) {
+                            continue;
+                        }
+                        hist = selfHist.getHistogram(index);
+                    }
+                    int binId = bins[j];
+                    int zeroId = trainDataStore.getZeroBin(fid);
+                    //int gradId = binId;
+                    //int hessId = gradId + param.numSplit;
+                    for (int k = 0; k < param.numClass; k++) {
+                        int gradId = k * param.numSplit * 2 + binId;
+                        int hessId = gradId + param.numSplit;
+                        float grad = insGrad[insId + param.numClass + k];
+                        float hess = insHess[insId + param.numClass + k];
+                        hist.set(gradId, hist.get(gradId) + grad);
+                        hist.set(hessId, hist.get(hessId) + hess);
+                        // 2.4. add the reverse to zero bin
+                        int gradZeroId = k * param.numSplit * 2 + zeroId;
+                        int hessZeroId = gradZeroId + param.numSplit;
+                        hist.set(gradZeroId, hist.get(gradZeroId) - grad);
+                        hist.set(hessZeroId, hist.get(hessZeroId) - hess);
+                    }
+                }
+                // 2.5. sum up
+                // sumGrad & sumHess in nodeStat is calculated
+                // from all instances, not instances on current worker
+                // so we need to sum up grad & hess in this loop
+                for (int k = 0; k < param.numClass; k++) {
+                    sumGrad[k] += insGrad[insId + param.numClass + k];
+                    sumHess[k] += insHess[insId + param.numClass + k];
+                }
+            }
+            // 3. add to zero bin
+            for (int i = 0; i < fset.length; i++) {
+                DenseFloatVector hist = selfHist.getHistogram(i);
+                int zeroId = trainDataStore.getZeroBin(fset[i]);
+                for (int k = 0; k < param.numClass; k++) {
+                    int gradZeroId = k * param.numSplit * 2 + zeroId;
+                    int hessZeroId = gradZeroId + param.numSplit;
+                    hist.set(gradZeroId, hist.get(gradZeroId) + sumGrad[k]);
+                    hist.set(hessZeroId, hist.get(hessZeroId) + sumHess[k]);
+                }
             }
         }
 
@@ -185,15 +260,17 @@ public class HistogramBuilder {
                     ? fset.length : from + featPerThread;
             float[] insGrad = controller.getInsGrad();
             float[] insHess = controller.getInsHess();
-            RegTNodeStat nodeStat = controller.getLastTree().getNode(nid).getNodeStat();
             int[] insToNode = controller.getInsToNode();
             int nodeStart = controller.getNodePosStart(nid);
             int nodeEnd = controller.getNodePosEnd(nid);
             if (param.numClass == 2) {
+                RegTNodeStat nodeStat = controller.getLastTree().getNode(nid).getNodeStat();
                 fpBinaryClassBuild(trainDataStore, fset, insGrad, insHess, nodeStat,
                         insToNode, nodeStart, nodeEnd, from, to);
             } else {
-                throw new AngelException("Multi-class not implemented");
+                RegTNodeStat[] nodeStats = controller.getLastTree().getNode(nid).getNodeStats();
+                fpMultiClassBuild(trainDataStore, fset, insGrad, insHess, nodeStats,
+                        insToNode, nodeStart, nodeEnd, from, to);
             }
         }
 
@@ -210,7 +287,8 @@ public class HistogramBuilder {
                 int[] bins = trainDataStore.getFeatBins(fid);
                 int nnz = indices.length;
                 // 2. allocate histogram
-                DenseFloatVector hist = new DenseFloatVector(param.numSplit * 2);
+                histogram.alloc(i);
+                DenseFloatVector hist = histogram.getHistogram(i);
                 // 3. loop non-zero instances, add to histogram, and record the gradients taken
                 float gradTaken = 0, hessTaken = 0;
                 for (int j = 0; j < nnz; j++) {
@@ -232,8 +310,57 @@ public class HistogramBuilder {
                 int hessZeroId = gradZeroId + param.numSplit;
                 hist.set(gradZeroId, sumGrad - gradTaken);
                 hist.set(hessZeroId, sumHess - hessTaken);
-                // 5. put to result
-                histogram.set(i, hist);
+            }
+        }
+
+        private void fpMultiClassBuild(FPDataStore trainDataStore, int[] fset,
+                                        float[] insGrad, float[] insHess, RegTNodeStat[] nodeStats,
+                                        int[] insToNode, int nodeStart, int nodeEnd,
+                                        int from, int to) {
+            float sumGrad[] = new float[param.numClass];
+            float sumHess[] = new float[param.numClass];
+            for (int k = 0; k < param.numClass; k++) {
+                sumGrad[k] = nodeStats[k].getSumGrad();
+                sumHess[k] = nodeStats[k].getSumHess();
+            }
+            for (int i = from; i < to; i++) {
+                // 1. get feature row
+                int fid = fset[i];
+                int[] indices = trainDataStore.getFeatIndices(fid);
+                int[] bins = trainDataStore.getFeatBins(fid);
+                int nnz = indices.length;
+                // 2. allocate histogram
+                histogram.alloc(i);
+                DenseFloatVector hist = histogram.getHistogram(i);
+                //DenseFloatVector hist = new DenseFloatVector(param.numClass * param.numSplit * 2);
+                // 3. loop non-zero instances, add to histogram, and record the gradients taken
+                float[] gradTaken = new float[param.numClass];
+                float[] hessTaken = new float[param.numClass];
+                for (int j = 0; j < nnz; j++) {
+                    int insId = indices[j];
+                    int insPos = insToNode[insId];
+                    if (nodeStart <= insPos && insPos <= nodeEnd) {
+                        int binId = bins[j];
+                        for (int k = 0; k < param.numClass; k++) {
+                            int gradId = k * param.numSplit * 2 + binId;
+                            int hessId = gradId + param.numSplit;
+                            float grad = insGrad[insId + param.numClass + k];
+                            float hess = insHess[insId + param.numClass + k];
+                            hist.set(gradId, hist.get(gradId) + grad);
+                            hist.set(hessId, hist.get(hessId) + hess);
+                            gradTaken[k] += grad;
+                            hessTaken[k] += hess;
+                        }
+                    }
+                }
+                // 4. add remaining grad and hess to zero bin
+                int zeroId = trainDataStore.getZeroBin(fid);
+                for (int k = 0; k < param.numClass; k++) {
+                    int gradZeroId = k * param.numSplit * 2 + zeroId;
+                    int hessZeroId = gradZeroId + param.numSplit;
+                    hist.set(gradZeroId, sumGrad[k] - gradTaken[k]);
+                    hist.set(hessZeroId, sumHess[k] - hessTaken[k]);
+                }
             }
         }
 
